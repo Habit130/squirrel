@@ -1,0 +1,86 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this repository is
+
+Squirrel (鼠鬚管) is the **macOS front-end** for Rime — an InputMethodKit (IMK) app written in Swift/AppKit. It talks to **librime**, the actual input-method engine (C++), through a C API. Squirrel receives an already-ranked candidate list from librime via `get_context` and only renders/paginates/highlights it; it does not generate or sort candidates itself (verified: there is no ranking/weight/sort/compare logic anywhere under `sources/`).
+
+This matters for this project's planned direction of building a custom candidate-ranking algorithm: **that work does not belong in this repo's Swift code.** Read "Where candidate ranking actually lives" below before starting it.
+
+## Git remotes and workflow (project override)
+
+- `origin` = personal fork, `https://github.com/Habit130/squirrel` — push feature branches and open PRs here.
+- `upstream` = official project, `https://github.com/rime/squirrel` — pull-only, to stay in sync with upstream. **Never push or open a PR against `upstream`.**
+- Otherwise the global git-flow convention applies as usual (`feature/<slug>` / `fix/<slug>` / `exp/<slug>` branches, Conventional Commits, autonomous branch/commit/push/PR against `origin`, no auto-merge, no force-push).
+
+## Build
+
+There are two very different build paths. Know which one a task needs:
+
+**Fast path — prebuilt librime (what CI and most day-to-day frontend work use):**
+
+```sh
+./action-install.sh   # downloads a prebuilt librime.1.dylib + Sparkle.framework release into lib/ and Frameworks/
+make                   # = make release; links against the prebuilt dylib, does NOT compile librime/ at all
+```
+
+`make`'s dependency rule for the dylib (`$(RIME_LIBRARY)`) has no prerequisites, so it only checks whether `lib/librime.1.dylib` exists — not whether `librime/` source changed. **Editing files under `librime/` has zero effect on the built app on this path.**
+
+**From-source path — required for any librime/engine change (this includes ranking-algorithm work):**
+
+```sh
+git submodule update --init --recursive librime   # + plum too if schema/grammar data changes are needed
+export BOOST_ROOT=/opt/homebrew/opt/boost   # `brew install boost` is enough for local dev; see INSTALL.md for the portable/universal option
+export MACOSX_DEPLOYMENT_TARGET=13.0        # NOT optional on recent Xcode — see gotcha below
+make clean               # required if action-install.sh ran before and left a prebuilt lib/librime.1.dylib
+make                     # $(RIME_LIBRARY) is now missing, so the `librime` target builds it from submodule source
+                          # (make -C librime deps && make -C librime release install), then copies it into lib/, bin/
+```
+
+Other targets: `make debug`, `make package` (produces a `.pkg`; set `DEV_ID` for codesigning/notarization), `make install` / `make install-debug` / `make install-release` (installs to `/Library/Input Methods/Squirrel.app`; needs sudo on first install), `make clean` / `make clean-deps` / `make clean-package`.
+
+### From-source build gotchas (verified against Xcode 27 beta / macOS 27 SDK)
+
+These bit a real from-source build attempt and cost significant time to root-cause. All stem from Make's dependency checks being file-existence-only, and CMake caching configure-time values — neither notices when *inputs* change if the *output* is already there.
+
+- **`librime/Makefile` defaults `MACOSX_DEPLOYMENT_TARGET ?= 10.15`.** Recent Xcode/macOS SDKs have dropped libc++ support below macOS 11.0, and `leveldb`'s vendored CMake build enables `-Werror`, so the resulting availability warning becomes a hard compile error (`"The selected platform is no longer supported by libc++."`) — while `glog`/`googletest` silently only warn, hiding the same problem. Fix: always `export MACOSX_DEPLOYMENT_TARGET=13.0` (matching the project's own supported floor) before building librime from source.
+- **CMake caches the deployment target per dependency on first configure.** If a `librime/deps/<dep>/build/` directory was already configured once (e.g. from a failed attempt before the env var was set correctly), re-running `make` with the env var fixed will *not* retroactively fix it — `cmake .` reuses the existing `CMakeCache.txt`. Fix: `make -C librime -f deps.mk clean-src` (wipes `deps/*/build/` only, not the installed `librime/lib`/`librime/include` outputs) before rebuilding.
+- **`librime`/`copy-rime-binaries` are `.PHONY`, but the top-level `$(RIME_LIBRARY)` prerequisite check is not.** Once `lib/librime.1.dylib` exists, plain `make`/`make debug` will skip the entire librime build+copy step again — even after you change librime source or add plugins. Force it with `make librime` directly.
+- **Plugins need two separate fetch steps, not one.** `librime/install-plugins.sh <owner>/librime-<name> ...` clones each plugin into `librime/plugins/<name>`, which librime's CMake auto-discovers (`file(GLOB ...)` in `librime/plugins/CMakeLists.txt`) and builds into `lib/rime-plugins/*.dylib` — but only on a build that actually re-enters `make librime` (see previous point). `librime-lua` additionally vendors its Lua 5.4 source on a separate `thirdparty` git branch of the same repo; run `(cd librime/plugins/lua && bash action-install.sh)` after cloning it, or its CMake configure fails to find a Lua to link against.
+
+## Lint and static analysis
+
+```sh
+swiftlint                              # lints sources/ per .swiftlint.yml; required by CI
+periphery scan --relative-results --skip-build --index-store-path build/Index.noindex/DataStore   # dead-code scan; run after a make build (index store is always on)
+```
+
+There is no unit test target in the Xcode project (IMK apps are hard to unit-test in isolation). Validation is `swiftlint` + `periphery` + a full Xcode build + manually exercising the input method — see SKILL.md's "Validation Checklist" for the specific scenarios (activation/deactivation, ASCII toggle, schema switching, candidate selection/paging, inline/non-inline preedit, vertical/linear layout, deploy/sync, quit/logout cleanup).
+
+To run it live: `make install-debug` or `make install-release`, then select "鼠鬚管" in System Settings > Keyboard > Input Sources. macOS (not Xcode) launches the IMKServer process, so use Xcode's Debug > Attach to Process on the running Squirrel process rather than Run.
+
+## Architecture
+
+For the detailed Swift/IMK frontend architecture — process startup, session lifecycle, the `handle()` key-event loop, marked-text/commit rules, candidate panel flow, config model, notifications — **read `SKILL.md` at the repo root**; it's accurate and detailed. One correction: SKILL.md's file paths use a stale `Squirrel/Sources/*.swift` prefix from before a rename; the real location is `sources/*.swift` (no `Squirrel/` prefix).
+
+Layering, top to bottom:
+
+- **`sources/*.swift`** — the whole frontend: IMK controller, candidate panel, theme/config, key mapping. UI, key-handling, and display-formatting changes go here.
+- **`librime/`** — git submodule, the Rime engine (C++). Dictionaries, user dictionaries, translators, and candidate scoring/ranking all live here. Not checked out by default (see Build).
+- **`plum/`** — git submodule, Rime's schema/data package manager (`rime-install`). Fetches input schemas and data recipes, e.g. `data/plum/default.yaml` and the grammar-model data package used by octagram (see below).
+- **`data/squirrel.yaml`** — checked-in default frontend settings (panel style, keyboard layout, notifications). `data/plum/` and `data/opencc/` are gitignored build outputs populated by `make data` / `action-install.sh`.
+- **`lib/`, `bin/`, `Frameworks/`** — gitignored, populated by the build (librime dylib + plugins, `rime_deployer`/`rime_dict_manager`, Sparkle.framework).
+
+## Where candidate ranking actually lives
+
+Nothing in `sources/` reorders candidates. For ranking work, the relevant layers — all outside this repo's Swift code — are:
+
+1. **librime core** (the `librime` submodule) — base dictionary/user-dictionary weights and candidate merging. Needs the from-source build above to iterate on.
+2. **librime-octagram** — the grammar/n-gram reranking plugin. Three separate pieces all need to be present to matter: the plugin binary (bundled in the prebuilt librime release per CHANGELOG: "compiled with lua, octagram and predict plugins"), the grammar data (`action-build.sh`'s `SQUIRREL_BUNDLED_RECIPES` installs `lotem/rime-octagram-data` for both Hans and Hant), and a schema that actually enables the grammar. This is the closest existing prior art for "improve candidate ordering" and is worth reading first.
+3. **librime-lua** — also bundled by default; lets you write a Lua `filter`/`translator` that reorders the candidate list from schema config, without recompiling C++. Likely the lowest-friction place to prototype a new algorithm.
+4. **librime-predict** — bundled next-word-prediction plugin.
+
+None of plugins 2-4's source lives in this repository; they're separate repos, normally installed as prebuilt binaries into `lib/rime-plugins/` (fast path) or via `librime/install-plugins.sh <repo-slug>` for a source build (see INSTALL.md).
+
+The only ranking-adjacent surface on the Squirrel side is `sources/ReservedProperty.swift`: a librime→frontend property protocol plugins use to send UI *hints* (e.g. `_comment_highlight`/`_comment_warning` to color specific candidate indices by index). It's cosmetic and doesn't affect order — it just reflects whatever a plugin's reranking already decided.
