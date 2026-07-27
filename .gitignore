@@ -19,3 +19,5 @@ package/*.xml
 *~
 .*.swp
 .DS_Store
+scripts/eval/.venv/
+scripts/eval/__pycache__/
