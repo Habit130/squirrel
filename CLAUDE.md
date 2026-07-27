@@ -30,13 +30,15 @@ make                   # = make release; links against the prebuilt dylib, does 
 **From-source path — required for any librime/engine change (this includes ranking-algorithm work):**
 
 ```sh
-git submodule update --init --recursive librime   # + plum too if schema/grammar data changes are needed
+git submodule update --init --recursive librime plum   # BOTH — plum is not optional here, see below
 export BOOST_ROOT=/opt/homebrew/opt/boost   # `brew install boost` is enough for local dev; see INSTALL.md for the portable/universal option
 export MACOSX_DEPLOYMENT_TARGET=13.0        # NOT optional on recent Xcode — see gotcha below
 make clean               # required if action-install.sh ran before and left a prebuilt lib/librime.1.dylib
 make                     # $(RIME_LIBRARY) is now missing, so the `librime` target builds it from submodule source
                           # (make -C librime deps && make -C librime release install), then copies it into lib/, bin/
 ```
+
+**`plum` must be initialized on this path even when you have no intention of touching schema data.** `make clean` deletes `data/plum/*` and `bin/*` (`Makefile:178-185`), and `bin/rime-install` plus three `data/plum/` files *are* `$(PLUM_DATA)` (`Makefile:17-20`), which `$(DEPS_CHECK)` requires (`Makefile:26`). With those files gone the next `make` runs the `plum-data` target, which shells out to `make -C plum` (`Makefile:60-71`) — and that fails outright if `plum/` is an empty submodule directory. Since `make clean` is a required step above, `plum` is a required checkout. (An already-populated `plum/` masks this, which is why a machine that once ran the fast path can build without noticing.)
 
 Other targets: `make debug`, `make package` (produces a `.pkg`; set `DEV_ID` for codesigning/notarization), `make install` / `make install-debug` / `make install-release` (installs to `/Library/Input Methods/Squirrel.app`; needs sudo on first install), `make clean` / `make clean-deps` / `make clean-package`.
 
