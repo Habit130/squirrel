@@ -84,3 +84,17 @@ Nothing in `sources/` reorders candidates. For ranking work, the relevant layers
 None of plugins 2-4's source lives in this repository; they're separate repos, normally installed as prebuilt binaries into `lib/rime-plugins/` (fast path) or via `librime/install-plugins.sh <repo-slug>` for a source build (see INSTALL.md).
 
 The only ranking-adjacent surface on the Squirrel side is `sources/ReservedProperty.swift`: a librime→frontend property protocol plugins use to send UI *hints* (e.g. `_comment_highlight`/`_comment_warning` to color specific candidate indices by index). It's cosmetic and doesn't affect order — it just reflects whatever a plugin's reranking already decided.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `origin` (`Habit130/squirrel`) via the `gh` CLI — never `upstream`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, label strings unchanged. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
