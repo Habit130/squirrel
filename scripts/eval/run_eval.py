@@ -66,9 +66,9 @@ def parse_dict(dict_path):
 
 
 def load_corpus(corpus_path, char_readings):
-    """Yield (sentence, pinyin) pairs, skipping anything unsuitable and
-    reporting why (OOV char, a reading absent from the dict, too long for
-    one input line).
+    """Return ([(sentence, syllables), ...], skipped) -- syllables is a
+    per-character list, kept (rather than joined) so derive_word_cases can
+    slice out sub-words with their in-context reading.
 
     Pinyin comes from pypinyin (sentence-level, context-aware polyphone
     disambiguation, e.g. 银行 -> yin hang) rather than the dict's own
@@ -103,12 +103,32 @@ def load_corpus(corpus_path, char_readings):
             if bad:
                 skipped.append((lineno, line, f"reading not in dict: {', '.join(bad)}"))
                 continue
-            pinyin = "".join(syllables)
-            if len(pinyin) > MAX_PINYIN_LEN:
-                skipped.append((lineno, line, f"pinyin too long ({len(pinyin)} chars)"))
+            if len("".join(syllables)) > MAX_PINYIN_LEN:
+                skipped.append((lineno, line, f"pinyin too long ({len(''.join(syllables))} chars)"))
                 continue
-            cases.append((line, pinyin))
+            cases.append((line, syllables))
     return cases, skipped
+
+
+def derive_word_cases(sentence_cases, dict_keys, lengths=(1, 2, 3, 4)):
+    """Pull out every dict-word substring of each sentence as its own
+    standalone test case: type just that word's pinyin (matching #2's
+    real usage pattern -- one or two words at a time, then pick from the
+    list -- rather than a whole continuous sentence) and expect it at
+    rank 1. Deduped by word text across the whole corpus, so this scales
+    for free as sentences are added. Includes single characters: a bare
+    homophone like 他/她/它 sharing "ta" is the same rerank-group-ceiling
+    question as a multi-char word, and it's #2's central motivating case.
+    """
+    words = {}
+    for sentence, syllables in sentence_cases:
+        n = len(sentence)
+        for length in lengths:
+            for i in range(0, n - length + 1):
+                word = sentence[i:i + length]
+                if word in dict_keys and word not in words:
+                    words[word] = syllables[i:i + length]
+    return sorted(words.items())
 
 
 def build_rime_dir(template_dir):
@@ -122,9 +142,9 @@ def build_rime_dir(template_dir):
 
 def build_script(cases):
     lines = ["set option zh_simp"]
-    for _, pinyin in cases:
+    for _, syllables in cases:
         lines.append("{Escape}")
-        lines.append(pinyin)
+        lines.append("".join(syllables))
         lines.append("print candidate list")
         lines.append(f"set option {MARKER}")
     lines.append("exit")
@@ -216,59 +236,63 @@ def main():
         sys.exit(f"error: {dict_src} not found (needed to derive corpus pinyin).")
 
     dict_keys, char_readings = parse_dict(dict_src)
-    cases, skipped = load_corpus(args.corpus, char_readings)
-    if not cases:
+    sentence_cases, skipped = load_corpus(args.corpus, char_readings)
+    if not sentence_cases:
         sys.exit("error: no usable test cases after filtering the corpus.")
+    word_cases = derive_word_cases(sentence_cases, dict_keys)
+
+    # One subprocess, one deploy, both case sets -- sentence cases first,
+    # word cases second, tagged so the report can split them.
+    tagged = [("sentence", s, syl) for s, syl in sentence_cases] + \
+             [("word", w, syl) for w, syl in word_cases]
+    run_cases = [(text, syl) for _kind, text, syl in tagged]
 
     rime_dir = build_rime_dir(args.template_dir)
     try:
-        stdout = run(args.console, rime_dir, cases)
+        stdout = run(args.console, rime_dir, run_cases)
     finally:
         if args.keep_tmp:
             print(f"(kept isolated rime_dir at {rime_dir})", file=sys.stderr)
         else:
             shutil.rmtree(rime_dir, ignore_errors=True)
 
-    blocks = split_into_blocks(stdout, len(cases))
+    blocks = split_into_blocks(stdout, len(run_cases))
 
-    top1 = top5 = 0
-    reciprocal_ranks = []
-    rank1_categories = {"word": 0, "non_word": 0}
-    not_found = 0
-    for (sentence, pinyin), block in zip(cases, blocks):
+    results = {"sentence": [], "word": []}
+    for (kind, target, _syl), block in zip(tagged, blocks):
         candidates = parse_candidates(block)
         rank = None
         for i, (text, _comment) in enumerate(candidates, 1):
-            if text == sentence:
+            if text == target:
                 rank = i
                 break
-        if candidates:
-            cat = classify_rank1(candidates[0][0], candidates[0][1], dict_keys)
-            rank1_categories[cat] += 1
-        if rank is None:
-            not_found += 1
-            reciprocal_ranks.append(0.0)
-            continue
-        reciprocal_ranks.append(1.0 / rank)
-        if rank == 1:
-            top1 += 1
-        if rank <= 5:
-            top5 += 1
+        cat = classify_rank1(*candidates[0], dict_keys) if candidates else None
+        results[kind].append((rank, cat))
 
-    n = len(cases)
-    mrr = sum(reciprocal_ranks) / n
-    rank1_total = sum(rank1_categories.values())
-    non_word_rate = rank1_categories["non_word"] / rank1_total if rank1_total else float("nan")
-
-    print(f"cases evaluated:        {n}")
     print(f"cases skipped:          {len(skipped)}")
     for lineno, line, reason in skipped:
         print(f"  corpus/sentences.txt:{lineno}: {line!r} - {reason}", file=sys.stderr)
-    print(f"not found in dump:      {not_found}")
-    print(f"top-1:                  {top1}/{n} = {top1 / n:.3f}")
-    print(f"top-5:                  {top5}/{n} = {top5 / n:.3f}")
-    print(f"MRR:                    {mrr:.3f}")
-    print(f"rank-1 non-word rate:   {rank1_categories['non_word']}/{rank1_total} = {non_word_rate:.3f}")
+    print()
+
+    for kind, label in (("sentence", "sentence-level (whole-sentence reconstruction)"),
+                         ("word", "word-level (single dict-word burst, #2's real usage pattern)")):
+        rows = results[kind]
+        n = len(rows)
+        top1 = sum(1 for rank, _ in rows if rank == 1)
+        top5 = sum(1 for rank, _ in rows if rank is not None and rank <= 5)
+        not_found = sum(1 for rank, _ in rows if rank is None)
+        mrr = sum((1.0 / rank if rank else 0.0) for rank, _ in rows) / n
+        cats = [cat for _, cat in rows if cat is not None]
+        non_word = cats.count("non_word")
+        non_word_rate = non_word / len(cats) if cats else float("nan")
+
+        print(f"=== {label}: {n} cases ===")
+        print(f"not found in dump:      {not_found}")
+        print(f"top-1:                  {top1}/{n} = {top1 / n:.3f}")
+        print(f"top-5:                  {top5}/{n} = {top5 / n:.3f}")
+        print(f"MRR:                    {mrr:.3f}")
+        print(f"rank-1 non-word rate:   {non_word}/{len(cats)} = {non_word_rate:.3f}")
+        print()
 
 
 if __name__ == "__main__":
