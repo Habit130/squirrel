@@ -41,11 +41,15 @@ Multi-context repo (presence of `CONTEXT-MAP.md` at the root):
         └── docs/adr/
 ```
 
-## Use the glossary's vocabulary
+## Use the glossary's vocabulary — within its scope
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
+**`CONTEXT.md` here is deliberately narrow.** It covers one area only: **candidate ranking after the candidates have been produced**. It says so in its own opening line. It is not a glossary for the repository as a whole.
 
-If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
+**Inside that scope** — reranking, candidate ordering, weights, the scoring pipeline, the language-model integration — use the terms as defined, and don't drift to synonyms the glossary explicitly lists under `_Avoid_`. If a ranking concept you need isn't there yet, that *is* a signal: either you're inventing language the project doesn't use (reconsider), or there's a real gap (note it for `/domain-modeling`).
+
+**Outside that scope, the absence of a term means nothing.** Squirrel's frontend concerns — IMK session lifecycle, the key-event loop, marked text and commit rules, candidate-panel layout and theming, schema and config handling, notifications, deployment — have their own established vocabulary that `CONTEXT.md` never set out to cover. For those, `SKILL.md` and the surrounding code are the authority. Do **not** treat a missing term as invented language, and do not file glossary gaps for concepts the glossary was never scoped to hold.
+
+If a piece of work straddles both (say, a ranking change that needs a new frontend hint), apply the glossary to the ranking half and follow existing code vocabulary for the rest.
 
 ## Flag ADR conflicts
 
