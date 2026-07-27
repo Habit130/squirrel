@@ -20,7 +20,7 @@ The candidate-reranking plugin (issues #17–#21) is **not** in this repo and is
 
 - **Code PRs go to that repo**; issues, the map, the spec and all blocking edges stay on `Habit130/squirrel` (`docs/agents/issue-tracker.md`).
 - The same git-flow convention applies inside it (`feature/<slug>` branches, Conventional Commits, PR against its default branch, no auto-merge, no force-push).
-- It carries its own `CLAUDE.md` — the scope constraint (简体 only), the code-style precedents, the `make librime` rule, and pointers back here for `CONTEXT.md` vocabulary and the issue tracker. A session working there does not get this file.
+- It must carry its own `CLAUDE.md` (an acceptance item of #17) — the scope constraint (简体 only), the code-style precedents, the `make librime` rule, and pointers back here for `CONTEXT.md` vocabulary and the issue tracker. A session working there does not get this file.
 
 ## Parallel dispatch: machine-level shared state
 
