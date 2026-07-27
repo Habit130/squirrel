@@ -14,6 +14,22 @@ This matters for this project's planned direction of building a custom candidate
 - `upstream` = official project, `https://github.com/rime/squirrel` — pull-only, to stay in sync with upstream. **Never push or open a PR against `upstream`.**
 - Otherwise the global git-flow convention applies as usual (`feature/<slug>` / `fix/<slug>` / `exp/<slug>` branches, Conventional Commits, autonomous branch/commit/push/PR against `origin`, no auto-merge, no force-push).
 
+## Plugin source repository
+
+The candidate-reranking plugin (issues #17–#21) is **not** in this repo and is not a submodule of it. Its source repo is **`Habit130/librime-llm-rerank`**, created by #17. Get it with `librime/install-plugins.sh Habit130/librime-llm-rerank`, which strips the `librime-` prefix and lands it at `librime/plugins/llm-rerank`, where librime's CMake auto-discovers it.
+
+- **Code PRs go to that repo**; issues, the map, the spec and all blocking edges stay on `Habit130/squirrel` (`docs/agents/issue-tracker.md`).
+- The same git-flow convention applies inside it (`feature/<slug>` branches, Conventional Commits, PR against its default branch, no auto-merge, no force-push).
+- It carries its own `CLAUDE.md` — the scope constraint (简体 only), the code-style precedents, the `make librime` rule, and pointers back here for `CONTEXT.md` vocabulary and the issue tracker. A session working there does not get this file.
+
+## Parallel dispatch: machine-level shared state
+
+Sessions working different tickets in parallel contend on state that git does not track. Before dispatching more than one at a time, assign each of these to exactly one session:
+
+- **The librime build tree** (`librime/build/`, `librime/plugins/`, `lib/`, `bin/`) — owned exclusively by whichever ticket runs `install-plugins.sh` or `make librime`. Anything that merely *uses* a built binary (e.g. `rime_api_console`) must copy it out first, or it gets swapped mid-run. Remember `$(RIME_LIBRARY)` is an existence-only check: once `lib/librime.1.dylib` exists, plain `make` silently skips the librime and plugin build entirely, so plugin work must invoke `make librime` explicitly.
+- **`~/Library/Rime`** — the live deployment. `luna_pinyin.userdb` mutates on every keystroke, and a redeploy rewrites `build/*.schema.yaml` under any session that is mid-verification. Eval and baseline work deploys into its own throwaway `rime_dir`; only live-typing verification touches the real one, and never while another session is redeploying.
+- **A quiet machine, for timing numbers only** — a latency measurement taken while a 10-core librime build is running is contaminated in the pessimistic direction. Any ticket whose deliverable is a duration gets the machine to itself.
+
 ## Build
 
 There are two very different build paths. Know which one a task needs:
