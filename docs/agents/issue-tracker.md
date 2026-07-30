@@ -19,7 +19,7 @@ Issues were disabled on the fork (GitHub's default for forks) and have been enab
 ### Tickets whose code lives in another repo
 
 The candidate-reranking plugin (#17–#21) is written in a separate repository — see
-"Plugin source repository" in `CLAUDE.md`. The split is:
+"Plugin source repository" in `AGENTS.md`. The split is:
 
 - **Issues, map, spec, decisions, blocking edges** — always here, `Habit130/squirrel`. A
   session working in the plugin repo still claims, comments on and closes its ticket here.
