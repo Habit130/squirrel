@@ -10,9 +10,10 @@ This matters for this project's planned direction of building a custom candidate
 
 ## Git remotes and workflow (project override)
 
-- `origin` = personal fork, `https://github.com/Habit130/squirrel` — push feature branches and open PRs here.
-- `upstream` = official project, `https://github.com/rime/squirrel` — pull-only, to stay in sync. **Never push or open a PR against `upstream`.**
-- The default branch is **`master`** (not `main`) — it plays the protected role the global rules assign to `main`: branch from latest `master`, all changes via PR, user squash-merges on GitHub.
+- `origin` = personal fork, `https://github.com/Habit130/squirrel` — the only write remote and PR target.
+- `upstream` = official project, `https://github.com/rime/squirrel` — read-only reference. This fork intentionally diverges: do not routinely merge or rebase `upstream`; selectively port relevant fixes through a feature branch and PR. **Never push or open a PR against `upstream`.**
+- The default branch is **`master`** (not `main`). Fetch `origin`, then create feature branches directly from `origin/master`; a local `master` must track `origin/master`, never `upstream/master`. All changes go through PRs, and the user squash-merges on GitHub.
+- GitHub permits squash merge only and protects `master` with a PR-only ruleset. Automatic head-branch deletion stays disabled because this repository uses stacked PRs.
 - Branch prefixes follow the global convention (`feat/`/`fix/`/`docs/`/`refactor/`/`chore/`), Conventional Commits in English, no auto-merge, no force-push.
 - `gh` does not reliably infer the fork as default repo (two remotes); it is pinned via `gh repo set-default Habit130/squirrel`. Verify with `gh repo set-default --view` before any write — see `docs/agents/issue-tracker.md`.
 
