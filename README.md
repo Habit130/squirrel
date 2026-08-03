@@ -1,110 +1,81 @@
-    鼠鬚管
-    爲物雖微情不淺
-    新詩醉墨時一揮
-    別後寄我無辭遠
+# 鼠鬚管 Squirrel
 
-    　　　——歐陽修
+鼠鬚管（Squirrel）是 [Rime 中州韻輸入法引擎](https://rime.im) 的 macOS 前端，基于 InputMethodKit 构建，适用于 macOS 13.0 及以上版本。
 
-今由　[中州韻輸入法引擎／Rime Input Method Engine](https://rime.im)
-及其他開源技術強力驅動
+本仓库是上游 [rime/squirrel](https://github.com/rime/squirrel) 的分叉，在保留上游全部功能的基础上，增加一项实验性能力：**LLM 候选词重排序**——候选呈现给用户之前，由本地运行的轻量语言模型结合当前会话上文，在同一重排组内重新调整候选的发射顺序，同时保留系统词典权重、用户词典权重与既有候选生成逻辑。
 
-【鼠鬚管】輸入法
-===
-[![Download](https://img.shields.io/github/v/release/rime/squirrel)](https://github.com/rime/squirrel/releases/latest)
-[![Build Status](https://github.com/rime/squirrel/actions/workflows/commit-ci.yml/badge.svg)](https://github.com/rime/squirrel/actions/workflows)
-[![GitHub Tag](https://img.shields.io/github/tag/rime/squirrel.svg)](https://github.com/rime/squirrel)
+[![Download](https://img.shields.io/github/v/release/Habit130/squirrel)](https://github.com/Habit130/squirrel/releases/latest)
+[![Build Status](https://github.com/Habit130/squirrel/actions/workflows/commit-ci.yml/badge.svg)](https://github.com/Habit130/squirrel/actions/workflows)
 
-式恕堂 版權所無
+> 当前为实验性开发分支：尚未发布正式安装包，LLM 重排序需要从源码构建并自行部署本地模型服务（见「安装」）。
 
-授權條款：[GPL v3](https://www.gnu.org/licenses/gpl-3.0.en.html)
+## 特性
 
-項目主頁：[rime.im](https://rime.im)
+- 上游 Squirrel / Rime 的全部功能：拼音输入、方案切换、用户词典、同步、主题定制等
+- LLM 候选词重排序：
+  - 完全本地推理（Qwen3-0.6B-Base，MLX），输入内容不出本机
+  - 独立推理进程（daemon），Unix socket 通信，不阻塞输入事件处理（[ADR-0001](docs/adr/0001-inference-process-boundary.md)）
+  - 窗口化、无状态、按请求打分，只以上文最近 64 个字符为条件（[ADR-0002](docs/adr/0002-windowed-stateless-scoring.md)）
+  - 任何打分故障都整窗原序透传，不改变候选集合、不阻塞文本提交
+  - 与 librime-octagram、librime-lua 等既有插件共存
+- 当前范围：仅简体中文输入方案（以 `luna_pinyin` 为开发基准）
 
-您可能還需要 Rime 用於其他操作系統的發行版：
+## 安装
 
-  * 【中州韻】（ibus-rime、fcitx-rime）用於 Linux
-  * 【小狼毫】用於 Windows
+> 目前没有开箱即用的安装包，以下两步均面向开发者与早期试用者。
 
-安裝輸入法
----
+1. **构建应用**：从源码构建 Squirrel，步骤见 [INSTALL.md](INSTALL.md)。
+2. **部署重排序服务**：构建并安装 `llm_rerank` 插件（随本仓库的 librime 子模块构建），部署 daemon 与模型权重。插件安装方式见 [librime-llm-rerank](https://github.com/Habit130/librime-llm-rerank)。
 
-本品適用於 macOS 13.0+
+初次安装后，若在部分应用中打不出字，请注销并重新登录。
 
-初次安裝，如果在部份應用程序中打不出字，請註銷並重新登錄。
+## 使用
 
-使用輸入法
----
+- 在系统输入法列表中选择「鼠鬚管」，通过 `Ctrl+`` `（或 `F4`）呼出方案菜单、切换输入方式
+- LLM 重排序通过输入方案的 `llm_rerank` 过滤器配置（启用后候选排序发生变化）：
 
-選取輸入法指示器菜單裏的【ㄓ】字樣圖標，開始用鼠鬚管寫字。
-通過快捷鍵 `` Ctrl+` `` 或 `F4` 呼出方案選單、切換輸入方式。
+```yaml
+engine:
+  filters:
+    - llm_rerank
+llm_rerank:
+  enable: true
+  window: 32                              # 上文窗口字符数
+  alpha: 2.0                              # 语言模型分权重
+  sys_coeff: 1.0                          # 系统词典权重
+  usr_coeff: 1.0                          # 用户词典权重
+  gamma: 2.0                              # 个性化证据权重
+  saturate_k: 3.0                         # 证据饱和参数
+  socket_path: ~/Library/Application Support/Squirrel/llm-rerank.sock
+```
 
-定製輸入法
----
+以上为默认值示例;其他可调项（`verbose` 等）见插件源码。
 
-定製方法，請參考線上 [幫助文檔](https://rime.im/docs/)。
+## 工作原理
 
-使用系統輸入法菜單：
+- 候选列表由 librime 生成并完成基础排序，本仓库的 Swift 前端只负责渲染与翻页，不重排候选（[CONTEXT.md](CONTEXT.md)）
+- 重排发生在 librime 插件层（[librime-llm-rerank](https://github.com/Habit130/librime-llm-rerank)）：在候选产出后、呈现前，以本次会话上文为条件重新调整同一重排组内候选的发射顺序
+- 设计规格见 [issue #16](https://github.com/Habit130/squirrel/issues/16)；架构决策见 [docs/adr/](docs/adr/)
 
-  * 選中「在線文檔」可打開以上網址
-  * 編輯用戶設定後，選擇「重新部署」以令修改生效
+## Roadmap
 
-安裝輸入方案
----
+- **第一阶段（进行中）**：通用 LLM 候选重排——已完成插件与打包（[#26](https://github.com/Habit130/squirrel/pull/26)），后续完善体验验收与配置收敛
+- **第二阶段（规划中）**：语义个性化候选重排——以本地语义记忆复用用户的历史选择：保存可重放的选择事件，在语义相近而非字面相同的上文下复用既往偏好，同时严格区分零检索证据与真故障，任何故障都沿用整次原序透传。规格见 [issue #43](https://github.com/Habit130/squirrel/issues/43)
 
-使用 [/plum/](https://github.com/rime/plum) 配置管理器獲取更多輸入方案。
+## 关联仓库
 
-致謝
----
+| 仓库 | 说明 |
+| --- | --- |
+| [Habit130/librime-llm-rerank](https://github.com/Habit130/librime-llm-rerank) | 候选重排插件源码（librime 插件，BSD-3-Clause） |
 
-輸入方案設計：
+## 构建与贡献
 
-  * 【朙月拼音】系列
+- 构建环境、依赖与发布流程：[INSTALL.md](INSTALL.md)
+- 仓库工作约定（分支、提交规范、评审流程）：[AGENTS.md](AGENTS.md)
+- 问题与需求：本仓库 [Issues](https://github.com/Habit130/squirrel/issues)；插件代码请提交到 [librime-llm-rerank](https://github.com/Habit130/librime-llm-rerank)
 
-    感謝 CC-CEDICT、Android 拼音、新酷音、opencc 等開源項目
+## 授权与致谢
 
-程序設計：
+本仓库基于上游 [rime/squirrel](https://github.com/rime/squirrel)（式恕堂 版權所無）分叉，沿用其 [GPL v3](LICENSE.txt) 授权。上游的完整版权与致谢（输入方案设计、程序设计与美术贡献者、所引用的开源软件清单）见上游仓库的 [README](https://github.com/rime/squirrel/blob/master/README.md)。
 
-  * 佛振
-  * Linghua Zhang
-  * Chongyu Zhu
-  * 雪齋
-  * faberii
-  * Chun-wei Kuo
-  * Junlu Cheng
-  * Jak Wings
-  * xiehuc
-
-美術：
-
-  * 圖標設計 佛振、梁海、雨過之後
-  * 配色方案 Aben、Chongyu Zhu、skoj、Superoutman、佛振、梁海
-
-本品引用了以下開源軟件：
-
-  * Boost C++ Libraries  (Boost Software License)
-  * capnproto (MIT License)
-  * darts-clone  (New BSD License)
-  * google-glog  (New BSD License)
-  * Google Test  (New BSD License)
-  * LevelDB  (New BSD License)
-  * librime  (New BSD License)
-  * OpenCC / 開放中文轉換  (Apache License 2.0)
-  * plum / 東風破 (GNU Lesser General Public License 3.0)
-  * Sparkle  (MIT License)
-  * UTF8-CPP  (Boost Software License)
-  * yaml-cpp  (MIT License)
-
-感謝王公子捐贈開發用機。
-
-問題與反饋
----
-
-發現程序有 BUG，或建議，或感想，請反饋到 [Rime 代碼之家討論區](https://github.com/rime/home/discussions)
-
-聯繫方式
----
-
-技術交流，歡迎光臨 [Rime 代碼之家](https://github.com/rime/home)，
-或致信 Rime 開發者 <rimeime@gmail.com>。
-
-謝謝
+感谢 [Rime 社区](https://github.com/rime/home) 与上游 Squirrel 的所有贡献者。
