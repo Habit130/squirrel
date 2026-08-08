@@ -111,16 +111,37 @@ add_lib() {
     add_line "${anchor_lib_line}" "${new_lib_line}"
 }
 
-data_files=(
-    $(ls data/plum/* | xargs basename)
+# 契約清單:只註冊清單內的檔案;data/plum 與 lib/rime-plugins 中未契約的
+# 本機殘留(如舊 recipe 遺留的 zh-hans gram)只發警告、不寫進 pbxproj。
+data_manifest="package/data_files_manifest"
+lib_manifest="package/rime_plugins_manifest"
+
+test -f "${data_manifest}"
+test -f "${lib_manifest}"
+
+manifest_data_files=(
+    $(grep -vE '^[[:space:]]*(#|$)' "${data_manifest}")
 )
 
-lib_files=(
-    $(ls lib/rime-plugins/* | xargs basename)
+present_data_files=(
+    $(ls data/plum/* | xargs -n1 basename)
 )
 
-for file in "${data_files[@]}"
+for file in "${present_data_files[@]}"
 do
+    if ! grep -Fqx "${file}" "${data_manifest}"
+    then
+        echo "warning: ${file} in data/plum is not in the bundled-data contract (${data_manifest}); not registering it" >&2
+    fi
+done
+
+for file in "${manifest_data_files[@]}"
+do
+    if [ ! -f "data/plum/${file}" ]
+    then
+        echo "warning: contract file ${file} missing from data/plum; update ${data_manifest} if the recipe no longer ships it" >&2
+        continue
+    fi
     if grep -Fq " ${file} " "${project_file}"
     then
         echo "found ${file}"
@@ -130,8 +151,29 @@ do
     add_file "${file}"
 done
 
-for lib in "${lib_files[@]}"
+manifest_lib_files=(
+    $(grep -vE '^[[:space:]]*(#|$)' "${lib_manifest}")
+)
+
+present_lib_files=(
+    $(ls lib/rime-plugins/* | xargs -n1 basename)
+)
+
+for lib in "${present_lib_files[@]}"
 do
+    if ! grep -Fqx "${lib}" "${lib_manifest}"
+    then
+        echo "warning: ${lib} in lib/rime-plugins is not in the rime-plugin contract (${lib_manifest}); not registering it" >&2
+    fi
+done
+
+for lib in "${manifest_lib_files[@]}"
+do
+    if [ ! -f "lib/rime-plugins/${lib}" ]
+    then
+        echo "warning: contract plugin ${lib} missing from lib/rime-plugins; update ${lib_manifest} if the librime release no longer ships it" >&2
+        continue
+    fi
     if grep -Fq " ${lib} " "${project_file}"
     then
         echo "found ${lib}"
