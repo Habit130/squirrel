@@ -77,6 +77,9 @@ opencc-data:
 copy-plum-data:
 	mkdir -p data/plum
 	cp $(PLUM_DATA_OUTPUT) data/plum/
+	# checked-in luna_pinyin custom patch; must land next to the schemas so
+	# the shared-data fallback of the schema compiler can resolve it
+	cp data/luna_pinyin.custom.yaml data/plum/
 	cp $(RIME_PACKAGE_INSTALLER) bin/
 
 copy-opencc-data:

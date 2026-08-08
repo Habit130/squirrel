@@ -1,0 +1,36 @@
+# Squirrel deployment: inject the llm_rerank_recorder processor into luna_pinyin.
+# encoding: utf-8
+#
+# The librime schema compiler resolves the `luna_pinyin.custom:/patch?`
+# reference in luna_pinyin.schema.yaml from the user data dir first, then from
+# the shared (app-bundled) data dir, so this file is picked up on a clean
+# deploy with no manual step. A user-provided ~/Library/Rime/
+# luna_pinyin.custom.yaml takes precedence and replaces this whole patch.
+#
+# Ordering constraint (from #47): the recorder must run before any processor
+# that consumes selection keys (key_binder, selector, express_editor), or
+# ProcessKeyEvent never sees the confirm key and key_in_flight breaks. librime
+# patch has no prepend operator, so this patch replaces the full processors
+# list, mirroring luna_pinyin 0.31 with llm_rerank_recorder first. Keep this
+# list in sync when the upstream schema changes its processors.
+#
+# No llm_rerank section is shipped: recording_enabled defaults to false
+# (coordinator ruling on #51: adoption must be explicit, missing keys default
+# to false). Enabling recording is a separate user action:
+#
+#   llm_rerank:
+#     recording_enabled: true
+#     reranking_enabled: false
+#     evidence_enabled: false
+#
+patch:
+  engine/processors:
+    - llm_rerank_recorder
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
