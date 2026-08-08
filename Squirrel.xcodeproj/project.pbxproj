@@ -37,6 +37,9 @@
 		447765CA25C30E97002415AF /* Sparkle.framework in Copy 3rd-party Frameworks */ = {isa = PBXBuildFile; fileRef = 447765C725C30E6B002415AF /* Sparkle.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		448363DD25BDBBED0022C7BA /* pinyin.yaml in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = 448363D925BDBBBF0022C7BA /* pinyin.yaml */; };
 		448363DE25BDBBED0022C7BA /* zhuyin.yaml in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = 448363DA25BDBBBF0022C7BA /* zhuyin.yaml */; };
+		3FA8C2DB2DCFC461D16AE335 /* zh-hans-t-essay-bgw.gram in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = 9AAD1F647CFE6048463D52BF /* zh-hans-t-essay-bgw.gram */; };
+		174B440DA2AECF892AE843CA /* zh-hans-t-essay-bgc.gram in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = 4B8E11E37807AFF5C7D5B3AF /* zh-hans-t-essay-bgc.gram */; };
+		69C8D72D2CBF7B2CE9CA622E /* luna_pinyin.custom.yaml in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = 48E5175B3D797D7479ED17C5 /* luna_pinyin.custom.yaml */; };
 		207BACE41D4D6308E1699BB5 /* zh-hant-t-essay-bgw.gram in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = B93B1B771BA746E5EF3B229F /* zh-hant-t-essay-bgw.gram */; };
 		DF31C997BE556AC470BE6DFC /* zh-hant-t-essay-bgc.gram in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = 7DE20C60B65C3F0D24E29547 /* zh-hant-t-essay-bgc.gram */; };
 		91C92106F786AEFE06164570 /* grammar.yaml in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = 4639481E7541071A4259FDE6 /* grammar.yaml */; };
@@ -165,6 +168,9 @@
 			files = (
 				448363DD25BDBBED0022C7BA /* pinyin.yaml in Copy Shared Support Files */,
 				448363DE25BDBBED0022C7BA /* zhuyin.yaml in Copy Shared Support Files */,
+				3FA8C2DB2DCFC461D16AE335 /* zh-hans-t-essay-bgw.gram in Copy Shared Support Files */,
+				174B440DA2AECF892AE843CA /* zh-hans-t-essay-bgc.gram in Copy Shared Support Files */,
+				69C8D72D2CBF7B2CE9CA622E /* luna_pinyin.custom.yaml in Copy Shared Support Files */,
 				207BACE41D4D6308E1699BB5 /* zh-hant-t-essay-bgw.gram in Copy Shared Support Files */,
 				DF31C997BE556AC470BE6DFC /* zh-hant-t-essay-bgc.gram in Copy Shared Support Files */,
 				91C92106F786AEFE06164570 /* grammar.yaml in Copy Shared Support Files */,
@@ -259,6 +265,9 @@
 		447765C725C30E6B002415AF /* Sparkle.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Sparkle.framework; path = Frameworks/Sparkle.framework; sourceTree = "<group>"; };
 		448363D925BDBBBF0022C7BA /* pinyin.yaml */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.yaml; name = pinyin.yaml; path = data/plum/pinyin.yaml; sourceTree = "<group>"; };
 		448363DA25BDBBBF0022C7BA /* zhuyin.yaml */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.yaml; name = zhuyin.yaml; path = data/plum/zhuyin.yaml; sourceTree = "<group>"; };
+		9AAD1F647CFE6048463D52BF /* zh-hans-t-essay-bgw.gram */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.yaml; name = zh-hans-t-essay-bgw.gram; path = data/plum/zh-hans-t-essay-bgw.gram; sourceTree = "<group>"; };
+		4B8E11E37807AFF5C7D5B3AF /* zh-hans-t-essay-bgc.gram */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.yaml; name = zh-hans-t-essay-bgc.gram; path = data/plum/zh-hans-t-essay-bgc.gram; sourceTree = "<group>"; };
+		48E5175B3D797D7479ED17C5 /* luna_pinyin.custom.yaml */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.yaml; name = luna_pinyin.custom.yaml; path = data/plum/luna_pinyin.custom.yaml; sourceTree = "<group>"; };
 		44986A93184B421700B3278D /* LICENSE.txt */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = LICENSE.txt; sourceTree = "<group>"; };
 		44986A94184B421700B3278D /* README.md */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = README.md; sourceTree = "<group>"; };
 		44AEBC7121F569CF00344375 /* punctuation.yaml */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; name = punctuation.yaml; path = data/plum/punctuation.yaml; sourceTree = "<group>"; };
@@ -497,6 +506,9 @@
 			children = (
 				448363D925BDBBBF0022C7BA /* pinyin.yaml */,
 				448363DA25BDBBBF0022C7BA /* zhuyin.yaml */,
+				9AAD1F647CFE6048463D52BF /* zh-hans-t-essay-bgw.gram */,
+				4B8E11E37807AFF5C7D5B3AF /* zh-hans-t-essay-bgc.gram */,
+				48E5175B3D797D7479ED17C5 /* luna_pinyin.custom.yaml */,
 				B93B1B771BA746E5EF3B229F /* zh-hant-t-essay-bgw.gram */,
 				7DE20C60B65C3F0D24E29547 /* zh-hant-t-essay-bgc.gram */,
 				4639481E7541071A4259FDE6 /* grammar.yaml */,
