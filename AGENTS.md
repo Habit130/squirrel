@@ -19,7 +19,10 @@ This matters for this project's planned direction of building a custom candidate
 
 ## Plugin source repository
 
-The candidate-reranking plugin implementation, including later-phase tickets tracked in this repo, is **not** in this repo and is not a submodule of it. Its source repo is **`Habit130/librime-llm-rerank`**, created by #17. Get it with `librime/install-plugins.sh Habit130/librime-llm-rerank`, which strips the `librime-` prefix and lands it at `librime/plugins/llm-rerank`, where librime's CMake auto-discovers it.
+The candidate-reranking plugin implementation, including later-phase tickets tracked in this repo, is **not** in this repo and is not a submodule of it. Its source repo is **`Habit130/librime-llm-rerank`**, created by #17. Two ways to get the plugin binary, one per build path:
+
+- **Fast path**: `action-install.sh` downloads a **pinned release artifact** — a universal `librime-llm-rerank.dylib` built by that repo's tag-triggered release workflow against the exact librime revision pinned here (`rime_version`/`rime_git_hash`), verified by pinned sha256 — and drops it into `lib/rime-plugins/`.
+- **From-source path**: `librime/install-plugins.sh Habit130/librime-llm-rerank`, which strips the `librime-` prefix and lands it at `librime/plugins/llm-rerank`, where librime's CMake auto-discovers it.
 
 - **Code PRs go to that repo**; issues, the map, the spec and all blocking edges stay on `Habit130/squirrel` (`docs/agents/issue-tracker.md`).
 - The same git-flow convention applies inside it (prefix branches, Conventional Commits, PR against its default branch, no auto-merge, no force-push).
@@ -32,11 +35,12 @@ There are two very different build paths. Know which one a task needs:
 **Fast path — prebuilt librime (what CI and most day-to-day frontend work use):**
 
 ```sh
-./action-install.sh   # downloads a prebuilt librime.1.dylib + Sparkle.framework release into lib/ and Frameworks/
+./action-install.sh   # downloads a prebuilt librime.1.dylib + Sparkle.framework release into lib/ and Frameworks/,
+                      # plus the pinned librime-llm-rerank.dylib release artifact into lib/rime-plugins/
 make                   # = make release; links against the prebuilt dylib, does NOT compile librime/ at all
 ```
 
-`make`'s dependency rule for the dylib (`$(RIME_LIBRARY)`) has no prerequisites, so it only checks whether `lib/librime.1.dylib` exists — not whether `librime/` source changed. **Editing files under `librime/` has zero effect on the built app on this path.**
+`make`'s dependency rule for the dylib (`$(RIME_LIBRARY)`) has no prerequisites, so it only checks whether `lib/librime.1.dylib` exists — not whether `librime/` source changed. **Editing files under `librime/` has zero effect on the built app on this path.** The same holds for the llm-rerank plugin: the fast path always uses the pinned release artifact from `action-install.sh`, so plugin source changes only take effect on this path after a new plugin release is tagged and the pin in `action-install.sh` is bumped (`llm_rerank_version`/`llm_rerank_sha256`).
 
 **From-source path — required for any librime/engine change (this includes ranking-algorithm work):**
 
@@ -60,7 +64,7 @@ These bit a real from-source build attempt and cost significant time to root-cau
 - **`librime/Makefile` defaults `MACOSX_DEPLOYMENT_TARGET ?= 10.15`.** Recent Xcode/macOS SDKs have dropped libc++ support below macOS 11.0, and `leveldb`'s vendored CMake build enables `-Werror`, so the resulting availability warning becomes a hard compile error (`"The selected platform is no longer supported by libc++."`) — while `glog`/`googletest` silently only warn, hiding the same problem. Fix: always `export MACOSX_DEPLOYMENT_TARGET=13.0` (matching the project's own supported floor) before building librime from source.
 - **CMake caches the deployment target per dependency on first configure.** If a `librime/deps/<dep>/build/` directory was already configured once (e.g. from a failed attempt before the env var was set correctly), re-running `make` with the env var fixed will *not* retroactively fix it — `cmake .` reuses the existing `CMakeCache.txt`. Fix: `make -C librime -f deps.mk clean-src` (wipes `deps/*/build/` only, not the installed `librime/lib`/`librime/include` outputs) before rebuilding.
 - **`librime`/`copy-rime-binaries` are `.PHONY`, but the top-level `$(RIME_LIBRARY)` prerequisite check is not.** Once `lib/librime.1.dylib` exists, plain `make`/`make debug` will skip the entire librime build+copy step again — even after you change librime source or add plugins. Force it with `make librime` directly.
-- **Plugins need two separate fetch steps, not one.** `librime/install-plugins.sh <owner>/librime-<name> ...` clones each plugin into `librime/plugins/<name>`, which librime's CMake auto-discovers (`file(GLOB ...)` in `librime/plugins/CMakeLists.txt`) and builds into `lib/rime-plugins/*.dylib` — but only on a build that actually re-enters `make librime` (see previous point). `librime-lua` additionally vendors its Lua 5.4 source on a separate `thirdparty` git branch of the same repo; run `(cd librime/plugins/lua && bash action-install.sh)` after cloning it, or its CMake configure fails to find a Lua to link against.
+- **Plugins need two separate fetch steps, not one.** `librime/install-plugins.sh <owner>/librime-<name> ...` clones each plugin into `librime/plugins/<name>`, which librime's CMake auto-discovers (`file(GLOB ...)` in `librime/plugins/CMakeLists.txt`) and builds into `lib/rime-plugins/*.dylib` — but only on a build that actually re-enters `make librime` (see previous point). `librime-lua` additionally vendors its Lua 5.4 source on a separate `thirdparty` git branch of the same repo; run `(cd librime/plugins/lua && bash action-install.sh)` after cloning it, or its CMake configure fails to find a Lua to link against. On the fast path these two fetch steps don't apply at all — `action-install.sh` installs the prebuilt plugins from the librime release, and `librime-llm-rerank` specifically from its pinned release artifact (see "Plugin source repository").
 
 ## Lint and validation
 
