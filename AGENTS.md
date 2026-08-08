@@ -19,7 +19,7 @@ This matters for this project's planned direction of building a custom candidate
 
 ## Plugin source repository
 
-The candidate-reranking plugin (issues #17–#21) is **not** in this repo and is not a submodule of it. Its source repo is **`Habit130/librime-llm-rerank`**, created by #17. Get it with `librime/install-plugins.sh Habit130/librime-llm-rerank`, which strips the `librime-` prefix and lands it at `librime/plugins/llm-rerank`, where librime's CMake auto-discovers it.
+The candidate-reranking plugin implementation, including later-phase tickets tracked in this repo, is **not** in this repo and is not a submodule of it. Its source repo is **`Habit130/librime-llm-rerank`**, created by #17. Get it with `librime/install-plugins.sh Habit130/librime-llm-rerank`, which strips the `librime-` prefix and lands it at `librime/plugins/llm-rerank`, where librime's CMake auto-discovers it.
 
 - **Code PRs go to that repo**; issues, the map, the spec and all blocking edges stay on `Habit130/squirrel` (`docs/agents/issue-tracker.md`).
 - The same git-flow convention applies inside it (prefix branches, Conventional Commits, PR against its default branch, no auto-merge, no force-push).
@@ -97,6 +97,17 @@ Nothing in `sources/` reorders candidates. For ranking work, the relevant layers
 None of plugins 2-4's source lives in this repository; they're separate repos, normally installed as prebuilt binaries into `lib/rime-plugins/` (fast path) or via `librime/install-plugins.sh <repo-slug>` for a source build (see INSTALL.md).
 
 The only ranking-adjacent surface on the Squirrel side is `sources/ReservedProperty.swift`: a librime→frontend property protocol plugins use to send UI *hints* (e.g. `_comment_highlight`/`_comment_warning` to color specific candidate indices by index). It's cosmetic and doesn't affect order — it just reflects whatever a plugin's reranking already decided.
+
+## Session roles for issue delivery
+
+Long implementation trains may designate one session as the **orchestrator**. That session inventories the issue frontier, checks dependencies and shared-state ownership, classifies each ticket by the autonomy its executor needs, writes the execution prompt, and independently accepts the result. It does not implement the dispatched ticket or treat the executor's summary as proof.
+
+Execution difficulty is about unresolved implementation judgment at handoff, not estimated effort:
+
+- **Easy**: the issue and existing precedents already determine the seam, behavior, important edge cases, and verification path. The executor mainly carries out known work.
+- **Hard**: the executor must still explore alternatives, choose seams, reconcile constraints, or design substantial tests while implementing. The prompt must explicitly grant that autonomy and identify the decisions that remain local to the ticket.
+
+Do not classify by line count, number of files, wall-clock time, or domain sophistication. `ready-for-agent` and difficulty are independent: the label says unattended execution is allowed, while easy/hard selects how much autonomous judgment that execution needs. If a product or specification decision is still open, the ticket is not merely hard; it is not ready for AFK execution and must return to a HITL planning step. See `docs/agents/issue-tracker.md` for the dispatch and acceptance workflow.
 
 ## Parallel dispatch: machine-level shared state
 

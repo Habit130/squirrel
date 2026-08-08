@@ -18,7 +18,7 @@ Issues were disabled on the fork (GitHub's default for forks) and have been enab
 
 ### Tickets whose code lives in another repo
 
-The candidate-reranking plugin (#17–#21) is written in a separate repository — see
+The candidate-reranking plugin, including later-phase implementation tickets, is written in a separate repository — see
 "Plugin source repository" in `AGENTS.md`. The split is:
 
 - **Issues, map, spec, decisions, blocking edges** — always here, `Habit130/squirrel`. A
@@ -37,6 +37,39 @@ So `gh repo set-default Habit130/squirrel` stays correct for every `gh issue` ca
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
+
+## Dispatch and acceptance sessions
+
+An orchestration session coordinates issue delivery rather than implementing the tickets it dispatches. Its scope is to inspect the live frontier, prepare prompts for execution sessions, prevent shared-state collisions, and independently accept or reject returned work. Keep feature implementation and orchestration in separate sessions so the acceptance pass does not inherit the executor's assumptions.
+
+### Classify execution autonomy
+
+Classify every ticket at dispatch time by how much implementation judgment remains:
+
+- **Easy**: the issue, spec, ADRs, and code precedents already fix the implementation seam, required behavior, important edge cases, and verification path. The execution session mainly follows established decisions.
+- **Hard**: the issue is ready to build, but the execution session must still explore the codebase, choose among valid implementation seams, reconcile competing constraints, or design non-obvious tests. Give it broad end-to-end ownership within the issue boundary.
+
+Difficulty does not measure code volume, duration, or technical prestige. A large mechanical migration can be easy; a small change with an ambiguous lifecycle seam can be hard. This classification is also separate from triage readiness: `ready-for-agent` permits unattended work, while easy/hard determines the executor autonomy the prompt should request. A ticket with an unresolved product or specification decision is not hard-AFK; remove it from the AFK frontier and resolve that decision with the owner first.
+
+### Dispatch workflow
+
+1. Refresh `origin`, the parent issue's sub-issues, native dependency counts, assignees, open PRs, and recent issue comments. Never dispatch from a stale body alone.
+2. Filter to open, unblocked, unclaimed implementation tickets carrying `ready-for-agent`. Exclude specs, maps, and HITL tickets.
+3. Determine the code repository and branch base, then allocate exclusive machine-level state listed in `AGENTS.md` before parallel work starts.
+4. Classify the ticket as easy or hard and state the reason in the handoff. Do not persist this as a label; reassess it whenever the issue or its blockers change.
+5. Give the execution session one issue only. Require it to claim the issue before writing, keep scope to that issue and its explicit acceptance criteria, implement and verify end to end, open the code PR in the correct repository, and leave both PR and issue open for independent acceptance.
+
+Every execution prompt must name the issue title and URL, autonomy class and rationale, source repository, required context documents, accepted scope and deferred scope, shared-state ownership, verification commands or evidence expected, and the exact handback artifacts. For an easy ticket, instruct the session to follow the specified path and stop for genuine ambiguity. For a hard ticket, authorize local engineering decisions within the acceptance boundary and require those decisions and tradeoffs in the handback.
+
+### Acceptance workflow
+
+The orchestration session performs acceptance from primary artifacts, not from the executor's completion summary:
+
+1. Re-read the issue body, blockers, later clarifications, linked spec/ADR terms, and every commit in the PR.
+2. Review the diff for behavioral correctness, scope expansion, privacy and failure semantics, concurrency or lifecycle risks, and missing tests. Check deferred work really belongs to another ticket.
+3. Re-run the relevant deterministic checks when the machine state is available. Treat reported timing or live-input results as evidence to audit, not automatically reproducible facts; verify their fixtures and environment.
+4. If acceptance fails, leave concrete findings with file or commit references and keep the issue and PR open for the same execution session to revise.
+5. If acceptance passes, record the checklist and evidence on the issue and mark the PR ready for the user to squash-merge. Do not merge for the user. Close the implementation issue only after its code PR is verifiably in the correct default branch, or immediately for a non-code deliverable whose acceptance itself completes the ticket.
 
 ## Pull requests as a triage surface
 
