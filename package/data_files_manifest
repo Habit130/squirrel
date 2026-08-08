@@ -1,0 +1,47 @@
+# Bundled data files: the explicit contract for data/plum/.
+#
+# package/add_data_files registers ONLY files listed here into
+# Squirrel.xcodeproj/project.pbxproj. Any unlisted file found in data/plum/
+# (e.g. a leftover from an older rime recipe) is warned about and skipped,
+# so local build output can never pollute the project file.
+#
+# Update this file whenever the bundled recipes change
+# (SQUIRREL_BUNDLED_RECIPES in action-build.sh, or plum defaults), keeping
+# it in sync with what a clean install puts into data/plum/. One filename
+# per line; blank lines and lines starting with # are ignored.
+bopomofo_express.schema.yaml
+bopomofo_tw.schema.yaml
+bopomofo.schema.yaml
+cangjie5_char.dict.yaml
+cangjie5_express.schema.yaml
+cangjie5.base.dict.yaml
+cangjie5.dict.yaml
+cangjie5.extended.dict.yaml
+cangjie5.schema.yaml
+cangjie5.stem.dict.yaml
+default.yaml
+detenele.schema.yaml
+essay.txt
+grammar.yaml
+key_bindings.yaml
+luna_pinyin_fluency.schema.yaml
+luna_pinyin_simp.schema.yaml
+luna_pinyin_tw.schema.yaml
+luna_pinyin.custom.yaml
+luna_pinyin.dict.yaml
+luna_pinyin.schema.yaml
+luna_quanpin.schema.yaml
+pinyin.yaml
+punctuation.yaml
+quick5.dict.yaml
+quick5.schema.yaml
+quick5.supplement.dict.yaml
+stroke.dict.yaml
+stroke.schema.yaml
+symbols.yaml
+terra_pinyin_12345.schema.yaml
+terra_pinyin.dict.yaml
+terra_pinyin.schema.yaml
+zh-hant-t-essay-bgc.gram
+zh-hant-t-essay-bgw.gram
+zhuyin.yaml

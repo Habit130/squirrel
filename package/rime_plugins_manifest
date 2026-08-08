@@ -1,0 +1,14 @@
+# Bundled rime plugins: the explicit contract for lib/rime-plugins/.
+#
+# package/add_data_files registers ONLY plugins listed here into
+# Squirrel.xcodeproj/project.pbxproj. Any unlisted dylib found in
+# lib/rime-plugins/ (e.g. a plugin left over from a from-source build that
+# the fast path does not ship) is warned about and skipped.
+#
+# Update this file when the set of plugins shipped by the pinned librime
+# release (lua/octagram/predict) or the llm-rerank artifact changes. One
+# filename per line; blank lines and lines starting with # are ignored.
+librime-llm-rerank.dylib
+librime-lua.dylib
+librime-octagram.dylib
+librime-predict.dylib

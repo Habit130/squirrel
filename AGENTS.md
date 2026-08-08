@@ -42,6 +42,8 @@ make                   # = make release; links against the prebuilt dylib, does 
 
 `make`'s dependency rule for the dylib (`$(RIME_LIBRARY)`) has no prerequisites, so it only checks whether `lib/librime.1.dylib` exists — not whether `librime/` source changed. **Editing files under `librime/` has zero effect on the built app on this path.** The same holds for the llm-rerank plugin: the fast path always uses the pinned release artifact from `action-install.sh`, so plugin source changes only take effect on this path after a new plugin release is tagged and the pin in `action-install.sh` is bumped (`llm_rerank_version`/`llm_rerank_sha256`).
 
+`package/add_data_files` (run by `make release`/`debug` before every xcodebuild, `Makefile:107,112`) registers bundled data and plugins into `Squirrel.xcodeproj/project.pbxproj` — but only files on the **explicit contract manifests** `package/data_files_manifest` and `package/rime_plugins_manifest`. Anything in `data/plum/` or `lib/rime-plugins/` that is not on the manifest (e.g. a zh-hans gram left over from an old octagram-data recipe) is **warned about on stderr and never registered**, so local build output can no longer pollute the project file (#99). Keep the manifests in sync when the bundled recipes (`SQUIRREL_BUNDLED_RECIPES` in `action-build.sh`, or plum defaults) or the librime release's plugin set change; the script also warns when a manifest-listed file is missing from `data/plum/`/`lib/rime-plugins/` — the signal to drop the stale entry from manifest *and* pbxproj (the #95 bug family).
+
 **From-source path — required for any librime/engine change (this includes ranking-algorithm work):**
 
 ```sh
