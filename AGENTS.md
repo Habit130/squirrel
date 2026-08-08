@@ -102,6 +102,45 @@ None of plugins 2-4's source lives in this repository; they're separate repos, n
 
 The only ranking-adjacent surface on the Squirrel side is `sources/ReservedProperty.swift`: a librime→frontend property protocol plugins use to send UI *hints* (e.g. `_comment_highlight`/`_comment_warning` to color specific candidate indices by index). It's cosmetic and doesn't affect order — it just reflects whatever a plugin's reranking already decided.
 
+## Deploying the llm_rerank_recorder to luna_pinyin (#88)
+
+The checked-in `data/luna_pinyin.custom.yaml` ships the recorder into the default schema. Delivery chain: `copy-plum-data` (Makefile) copies it next to the schemas in `data/plum/`, `package/add_data_files` bundles it into the app's SharedSupport, and on deploy the librime schema compiler resolves `luna_pinyin.custom:/patch?` (already referenced by `luna_pinyin.schema.yaml`) from the user data dir first, falling back to the app-bundled shared data dir. No manual step on a clean CI build.
+
+Constraints baked into the patch (from #47):
+
+- **Processor-chain order**: the recorder must precede every processor that consumes selection keys (`key_binder`, `selector`, `express_editor`) or `ProcessKeyEvent` never sees the confirm key and `key_in_flight` breaks. librime's patch language has no prepend operator, so the patch replaces the whole `engine/processors` list, mirroring luna_pinyin 0.31 with `llm_rerank_recorder` first. **Keep this list in sync when the upstream schema changes its processors.**
+- **Component-construction order**: the recorder must be constructed before the `llm_rerank` filter (the filter resolves the recorder's session via the registry at construction). librime constructs processors before filters, so this holds automatically — but never move the recorder into `filters`, and document the dependency if that ever changes.
+- **Known residual window**: when `key_binder` hijacks a candidate key, `trigger_keycode` may be distorted; the confirmation source classification remains correct.
+- **User custom overrides the deployment**: a user-provided `~/Library/Rime/luna_pinyin.custom.yaml` replaces this file wholesale (single-file resolution). A user who already has one must repeat the full processors patch to keep the recorder (see the enablement example below).
+
+Recording is off by default (coordinator ruling on #51: missing v2 keys default to false, adoption must be explicit). The shipped patch sets no `llm_rerank` section at all. To enable recording a user adds the v2 switches — and must include the `llm_rerank` filter (the snapshot source) plus the full processors patch in their custom file:
+
+```yaml
+patch:
+  engine/processors:
+    - llm_rerank_recorder
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  engine/filters:
+    - simplifier@zh_hans
+    - simplifier@zh_hant_hk
+    - simplifier@zh_hant_tw
+    - uniquifier
+    - llm_rerank
+  llm_rerank:
+    recording_enabled: true
+    reranking_enabled: false
+    evidence_enabled: false
+```
+
+(With `reranking_enabled: true` the filter additionally contacts the daemon to score the window; `false` keeps recording without any daemon dependency.) Facts land in `~/Library/Application Support/Squirrel/SemanticMemory/facts.sqlite3`. Note the `llm_rerank` filter itself is **not** deployed by this patch — only the recorder is; until a filter-deployment ticket exists, an enabled recorder logs `missing_competition_snapshot` for selections (no snapshots, no facts).
+
 ## Session roles for issue delivery
 
 Long implementation trains may designate one session as the **orchestrator**. That session inventories the issue frontier, checks dependencies and shared-state ownership, classifies each ticket by the autonomy its executor needs, writes the execution prompt, and independently accepts the result. It does not implement the dispatched ticket or treat the executor's summary as proof.
