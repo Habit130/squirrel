@@ -10,8 +10,8 @@ sparkle_version=2.6.2
 # against the librime revision pinned above. The sha256 is that of the
 # universal dylib attached to the release; regenerate it on bump with:
 #   shasum -a 256 librime-llm-rerank.dylib
-llm_rerank_version="v1.0.1"
-llm_rerank_sha256="8392bfa7205961899ebf697930d5c057b1c5f2842f07c70fdfe549d314c7cdd3"
+llm_rerank_version="v1.0.2"
+llm_rerank_sha256="268e111c7ac2aae9c44ca427c1ef5588c2f54baf197ee1d89678bfa4a2d9aa68"
 
 rime_archive="rime-${rime_git_hash}-macOS-universal.tar.bz2"
 rime_download_url="https://github.com/rime/librime/releases/download/${rime_version}/${rime_archive}"
