@@ -94,7 +94,7 @@ Layering, top to bottom:
 Nothing in `sources/` reorders candidates. For ranking work, the relevant layers — all outside this repo's Swift code — are:
 
 1. **librime core** (the `librime` submodule) — base dictionary/user-dictionary weights and candidate merging. Needs the from-source build above to iterate on.
-2. **librime-octagram** — the grammar/n-gram reranking plugin. Three separate pieces all need to be present to matter: the plugin binary (bundled in the prebuilt librime release per CHANGELOG: "compiled with lua, octagram and predict plugins"), the grammar data (`action-build.sh`'s `SQUIRREL_BUNDLED_RECIPES` installs `lotem/rime-octagram-data` for both Hans and Hant), and a schema that actually enables the grammar. This is the closest existing prior art for "improve candidate ordering" and is worth reading first.
+2. **librime-octagram** — the grammar/n-gram reranking plugin. Three separate pieces all need to be present to matter: the plugin binary (bundled in the prebuilt librime release per CHANGELOG: "compiled with lua, octagram and predict plugins"), the grammar data (`action-build.sh`'s `SQUIRREL_BUNDLED_RECIPES` installs `lotem/rime-octagram-data`, which on a clean environment ships only `grammar.yaml`, plus `lotem/rime-octagram-data@hant` for the zh-hant gram files; there is no zh-hans gram package), and a schema that actually enables the grammar. This is the closest existing prior art for "improve candidate ordering" and is worth reading first.
 3. **librime-lua** — also bundled by default; lets you write a Lua `filter`/`translator` that reorders the candidate list from schema config, without recompiling C++. Likely the lowest-friction place to prototype a new algorithm.
 4. **librime-predict** — bundled next-word-prediction plugin.
 
