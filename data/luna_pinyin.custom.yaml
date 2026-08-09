@@ -1,27 +1,70 @@
 # Squirrel deployment: inject the llm_rerank_recorder processor into luna_pinyin.
 # encoding: utf-8
 #
-# The librime schema compiler resolves the `luna_pinyin.custom:/patch?`
-# reference in luna_pinyin.schema.yaml from the user data dir first, then from
-# the shared (app-bundled) data dir, so this file is picked up on a clean
-# deploy with no manual step. A user-provided ~/Library/Rime/
-# luna_pinyin.custom.yaml takes precedence and replaces this whole patch.
+# Delivery chain: copy-plum-data (Makefile) copies this file next to the
+# schemas in data/plum/, package/add_data_files bundles it into the app's
+# SharedSupport, and on deploy the librime schema compiler resolves the
+# `luna_pinyin.custom:/patch?` reference in luna_pinyin.schema.yaml from the
+# user data dir first, falling back to the app-bundled shared data dir. No
+# manual step on a clean build.
 #
-# Ordering constraint (from #47): the recorder must run before any processor
-# that consumes selection keys (key_binder, selector, express_editor), or
-# ProcessKeyEvent never sees the confirm key and key_in_flight breaks. librime
-# patch has no prepend operator, so this patch replaces the full processors
-# list, mirroring luna_pinyin 0.31 with llm_rerank_recorder first. Keep this
-# list in sync when the upstream schema changes its processors.
+# CONSTRAINTS — read before editing this patch:
 #
-# No llm_rerank section is shipped: recording_enabled defaults to false
-# (coordinator ruling on #51: adoption must be explicit, missing keys default
-# to false). Enabling recording is a separate user action:
+# 1. Processor-chain order (from #47): the recorder must run before any
+#    processor that consumes selection keys (key_binder, selector,
+#    express_editor), or ProcessKeyEvent never sees the confirm key and
+#    key_in_flight breaks. librime patch has no prepend operator, so this
+#    patch replaces the full processors list, mirroring luna_pinyin 0.31
+#    with llm_rerank_recorder first. Keep this list in sync when the
+#    upstream schema changes its processors.
+# 2. Component-construction order: the recorder must be constructed before
+#    the llm_rerank filter (the filter resolves the recorder's session via
+#    the registry at construction). librime constructs processors before
+#    filters, so this holds automatically — but never move the recorder
+#    into engine/filters.
+# 3. Known residual window: when key_binder hijacks a candidate key,
+#    trigger_keycode may be distorted; the confirmation source
+#    classification remains correct.
+# 4. User override: a user-provided ~/Library/Rime/luna_pinyin.custom.yaml
+#    replaces this file wholesale (single-file resolution). A user who
+#    already has one must repeat the full processors patch (plus the
+#    filter list below when enabling recording) to keep the recorder.
 #
-#   llm_rerank:
-#     recording_enabled: true
-#     reranking_enabled: false
-#     evidence_enabled: false
+# Recording is off by default (coordinator ruling on #51: missing v2 keys
+# default to false; adoption must be explicit). This patch ships no
+# llm_rerank section and does NOT deploy the llm_rerank filter — only the
+# recorder. Until a filter-deployment ticket exists, an enabled recorder
+# logs missing_competition_snapshot for selections (no snapshots, no
+# facts). Facts land in ~/Library/Application Support/Squirrel/
+# SemanticMemory/facts.sqlite3.
+#
+# To enable recording, a user's custom file needs the full processors patch
+# above, the llm_rerank filter (the snapshot source), and the v2 switches:
+#
+#   patch:
+#     engine/processors:
+#       - llm_rerank_recorder
+#       - ascii_composer
+#       - recognizer
+#       - key_binder
+#       - speller
+#       - punctuator
+#       - selector
+#       - navigator
+#       - express_editor
+#     engine/filters:
+#       - simplifier@zh_hans
+#       - simplifier@zh_hant_hk
+#       - simplifier@zh_hant_tw
+#       - uniquifier
+#       - llm_rerank
+#     llm_rerank:
+#       recording_enabled: true
+#       reranking_enabled: false
+#       evidence_enabled: false
+#
+# (With reranking_enabled: true the filter additionally contacts the daemon
+# to score the window; false keeps recording without any daemon dependency.)
 #
 patch:
   engine/processors:

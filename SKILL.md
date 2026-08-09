@@ -11,21 +11,26 @@ Use this skill when making changes to Squirrel, a macOS InputMethodKit frontend 
 
 The Xcode project is organized around one app target, `Squirrel.app`, plus bundled resources and librime plugins.
 
-- `Squirrel/Sources/Main.swift`: process entry point, command-line maintenance commands, IMK server creation, app setup, and global librime startup.
-- `Squirrel/Sources/SquirrelApplicationDelegate.swift`: app-wide state. Owns the candidate panel, global `SquirrelConfig`, status item, Sparkle update integration, distributed notifications, and librime setup/finalization.
-- `Squirrel/Sources/SquirrelInputController.swift`: the main InputMethodKit controller. Owns one active librime session per controller instance, receives key events, translates macOS events to Rime key events, commits text, updates marked text, and drives the candidate panel.
-- `Squirrel/Sources/MacOSKeyCodes.swift`: maps AppKit/Carbon key codes and modifier flags to librime/X11 key symbols and masks.
-- `Squirrel/Sources/SquirrelConfig.swift`: thin typed wrapper over `RimeConfig`, with base config/schema fallback and cached option reads.
-- `Squirrel/Sources/SquirrelTheme.swift`: converts Rime/Squirrel style configuration into fonts, colors, layout flags, candidate formatting, and drawing attributes.
-- `Squirrel/Sources/SquirrelPanel.swift`: nonactivating candidate/status panel. Builds attributed candidate text, positions the panel near the text cursor, handles paging/candidate mouse events, and delegates selection actions back to the input controller.
-- `Squirrel/Sources/SquirrelView.swift`: custom AppKit drawing surface for candidate/preedit backgrounds, highlights, paging affordances, vertical text, and hit testing.
-- `Squirrel/Sources/ReservedProperty.swift`: reserved librime plugin property protocol for frontend UI hints such as comment highlighting and UI refresh.
-- `Squirrel/Sources/BridgingFunctions.swift`: Swift helpers for C bridge structs, persistent C strings, optional assignment, and geometry utilities.
-- `Squirrel/Sources/InputSource.swift`: Text Input Source registration, enable/disable/select helpers, and current input source lookup.
-- `Squirrel/Resources/Info.plist`: InputMethodKit registration metadata, input modes (`Hans`, `Hant`), IMK controller class names, connection name, Sparkle metadata, and input-source properties.
-- `Squirrel/Resources/Squirrel.entitlements`: disables App Sandbox, enables network client access, and disables library validation for bundled dylibs/frameworks.
-- `Squirrel/SharedSupport`: bundled Rime data, default schemas, OpenCC data, and `squirrel.yaml`.
-- `Squirrel/librime-*.dylib`, `Squirrel/Frameworks/Linked Frameworks/librime.1.dylib`: backend libraries and plugins used by the frontend.
+Repo-relative paths:
+
+- `sources/Main.swift`: process entry point, command-line maintenance commands, IMK server creation, app setup, and global librime startup.
+- `sources/SquirrelApplicationDelegate.swift`: app-wide state. Owns the candidate panel, global `SquirrelConfig`, status item, Sparkle update integration, distributed notifications, and librime setup/finalization.
+- `sources/SquirrelInputController.swift`: the main InputMethodKit controller. Owns one active librime session per controller instance, receives key events, translates macOS events to Rime key events, commits text, updates marked text, and drives the candidate panel.
+- `sources/MacOSKeyCodes.swift`: maps AppKit/Carbon key codes and modifier flags to librime/X11 key symbols and masks.
+- `sources/SquirrelConfig.swift`: thin typed wrapper over `RimeConfig`, with base config/schema fallback and cached option reads.
+- `sources/SquirrelTheme.swift`: converts Rime/Squirrel style configuration into fonts, colors, layout flags, candidate formatting, and drawing attributes.
+- `sources/SquirrelPanel.swift`: nonactivating candidate/status panel. Builds attributed candidate text, positions the panel near the text cursor, handles paging/candidate mouse events, and delegates selection actions back to the input controller.
+- `sources/SquirrelView.swift`: custom AppKit drawing surface for candidate/preedit backgrounds, highlights, paging affordances, vertical text, and hit testing.
+- `sources/ReservedProperty.swift`: reserved librime plugin property protocol for frontend UI hints such as comment highlighting and UI refresh.
+- `sources/BridgingFunctions.swift`: Swift helpers for C bridge structs, persistent C strings, optional assignment, and geometry utilities.
+- `sources/InputSource.swift`: Text Input Source registration, enable/disable/select helpers, and current input source lookup.
+- `resources/Info.plist`: InputMethodKit registration metadata, input modes (`Hans`, `Hant`), IMK controller class names, connection name, Sparkle metadata, and input-source properties.
+- `resources/Squirrel.entitlements`: disables App Sandbox, enables network client access, and disables library validation for bundled dylibs/frameworks.
+
+App-bundle paths (inside the built `Squirrel.app/Contents`, not the repo tree):
+
+- `SharedSupport/`: bundled Rime data, default schemas, OpenCC data, and `squirrel.yaml`; assembled from `data/` by the build (`package/add_data_files` registers it into the Xcode project).
+- `Frameworks/librime.1.dylib`, `Frameworks/rime-plugins/*.dylib`, `Frameworks/Sparkle.framework`: backend library, librime plugins, and update framework; assembled from the repo's gitignored `lib/` and `Frameworks/` staging directories.
 
 ## Process Startup
 

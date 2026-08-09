@@ -14,6 +14,7 @@ This matters for this project's planned direction of building a custom candidate
 - `upstream` = official project, `https://github.com/rime/squirrel` — read-only reference. This fork intentionally diverges: do not routinely merge or rebase `upstream`; selectively port relevant fixes through a feature branch and PR. **Never push or open a PR against `upstream`.**
 - The default branch is **`master`** (not `main`). Fetch `origin`, then create feature branches directly from `origin/master`; a local `master` must track `origin/master`, never `upstream/master`. All changes go through PRs, and the user squash-merges on GitHub.
 - GitHub permits squash merge only and protects `master` with a PR-only ruleset. Automatic head-branch deletion stays disabled because this repository uses stacked PRs.
+- Starting new work while the current branch holds a complete work unit without an open PR: open that PR first, then create the new branch stacked on top of it. Branch from `origin/master` only when the previous work is already merged.
 - Branch prefixes follow the global convention (`feat/`/`fix/`/`docs/`/`refactor/`/`chore/`), Conventional Commits in English, no auto-merge, no force-push.
 - `gh` does not reliably infer the fork as default repo (two remotes); it is pinned via `gh repo set-default Habit130/squirrel`. Verify with `gh repo set-default --view` before any write — see `docs/agents/issue-tracker.md`.
 
@@ -81,7 +82,7 @@ To run it live: `make install-debug` or `make install-release`, then select "鼠
 
 ## Architecture
 
-For the detailed Swift/IMK frontend architecture — process startup, session lifecycle, the `handle()` key-event loop, marked-text/commit rules, candidate panel flow, config model, notifications — **read `SKILL.md` at the repo root**; it's accurate and detailed. One correction: SKILL.md's file paths use a stale `Squirrel/Sources/*.swift` prefix from before a rename; the real location is `sources/*.swift` (no `Squirrel/` prefix).
+For the detailed Swift/IMK frontend architecture — process startup, session lifecycle, the `handle()` key-event loop, marked-text/commit rules, candidate panel flow, config model, notifications — **read `SKILL.md` at the repo root**; it's accurate and detailed.
 
 Layering, top to bottom:
 
@@ -104,57 +105,15 @@ None of plugins 2-4's source lives in this repository; they're separate repos, n
 
 The only ranking-adjacent surface on the Squirrel side is `sources/ReservedProperty.swift`: a librime→frontend property protocol plugins use to send UI *hints* (e.g. `_comment_highlight`/`_comment_warning` to color specific candidate indices by index). It's cosmetic and doesn't affect order — it just reflects whatever a plugin's reranking already decided.
 
-## Deploying the llm_rerank_recorder to luna_pinyin (#88)
+## The llm_rerank_recorder deployment
 
-The checked-in `data/luna_pinyin.custom.yaml` ships the recorder into the default schema. Delivery chain: `copy-plum-data` (Makefile) copies it next to the schemas in `data/plum/`, `package/add_data_files` bundles it into the app's SharedSupport, and on deploy the librime schema compiler resolves `luna_pinyin.custom:/patch?` (already referenced by `luna_pinyin.schema.yaml`) from the user data dir first, falling back to the app-bundled shared data dir. No manual step on a clean CI build.
-
-Constraints baked into the patch (from #47):
-
-- **Processor-chain order**: the recorder must precede every processor that consumes selection keys (`key_binder`, `selector`, `express_editor`) or `ProcessKeyEvent` never sees the confirm key and `key_in_flight` breaks. librime's patch language has no prepend operator, so the patch replaces the whole `engine/processors` list, mirroring luna_pinyin 0.31 with `llm_rerank_recorder` first. **Keep this list in sync when the upstream schema changes its processors.**
-- **Component-construction order**: the recorder must be constructed before the `llm_rerank` filter (the filter resolves the recorder's session via the registry at construction). librime constructs processors before filters, so this holds automatically — but never move the recorder into `filters`, and document the dependency if that ever changes.
-- **Known residual window**: when `key_binder` hijacks a candidate key, `trigger_keycode` may be distorted; the confirmation source classification remains correct.
-- **User custom overrides the deployment**: a user-provided `~/Library/Rime/luna_pinyin.custom.yaml` replaces this file wholesale (single-file resolution). A user who already has one must repeat the full processors patch to keep the recorder (see the enablement example below).
-
-Recording is off by default (coordinator ruling on #51: missing v2 keys default to false, adoption must be explicit). The shipped patch sets no `llm_rerank` section at all. To enable recording a user adds the v2 switches — and must include the `llm_rerank` filter (the snapshot source) plus the full processors patch in their custom file:
-
-```yaml
-patch:
-  engine/processors:
-    - llm_rerank_recorder
-    - ascii_composer
-    - recognizer
-    - key_binder
-    - speller
-    - punctuator
-    - selector
-    - navigator
-    - express_editor
-  engine/filters:
-    - simplifier@zh_hans
-    - simplifier@zh_hant_hk
-    - simplifier@zh_hant_tw
-    - uniquifier
-    - llm_rerank
-  llm_rerank:
-    recording_enabled: true
-    reranking_enabled: false
-    evidence_enabled: false
-```
-
-(With `reranking_enabled: true` the filter additionally contacts the daemon to score the window; `false` keeps recording without any daemon dependency.) Facts land in `~/Library/Application Support/Squirrel/SemanticMemory/facts.sqlite3`. Note the `llm_rerank` filter itself is **not** deployed by this patch — only the recorder is; until a filter-deployment ticket exists, an enabled recorder logs `missing_competition_snapshot` for selections (no snapshots, no facts).
+`data/luna_pinyin.custom.yaml` ships the recorder into luna_pinyin. All deployment constraints — processor-chain order, component-construction order, the residual key-binder window, user-override behavior, and the user enablement recipe — are documented in that file's header comments; read them before touching the file. Delivery chain for anyone changing it: `copy-plum-data` (Makefile) → `package/add_data_files` → librime schema-compiler resolution of `luna_pinyin.custom:/patch?` (user data dir first, app-bundled shared dir as fallback).
 
 ## Session roles for issue delivery
 
-An issue-delivery task may designate one sufficiently capable session as the **orchestrator** over an owner-confirmed, task-dependent scope. That session inventories the issue frontier, checks dependencies and shared-state ownership, shapes and classifies each ticket, writes a self-contained execution prompt, and independently accepts the result from primary artifacts. It neither implements the dispatched ticket nor starts an implementation subagent; the owner starts every implementation session by transferring the prompt to a separately chosen agent.
+An issue-delivery task may designate one session as **orchestrator** over an owner-confirmed scope: it shapes tickets, writes self-contained execution prompts, and accepts results from primary artifacts. It never implements a dispatched ticket and never starts an implementation subagent; the owner starts every execution session, one issue per session, one active writer per branch/PR.
 
-Each execution session handles one issue, with one active writer on its branch and PR. Request the lowest-cost capability sufficient for the remaining judgment, biasing toward the less capable option when several are sufficient; name capability requirements, never concrete models, in the persistent workflow. Acceptance failures are classified before routing. A bounded chain may use one initial attempt, one same-level correction for a local defect, one genuinely higher-capability repairer, and one fresh recovery executor at least as capable as the orchestration tier; skip known-insufficient levels. All implementation sessions are owner-started, and exhaustion or a missing higher sufficient level returns the issue to `ready-for-human`. The exact workflow and prompt contract live in `docs/agents/issue-tracker.md`.
-
-Execution difficulty is about unresolved implementation judgment at handoff, not estimated effort:
-
-- **Easy**: the issue and existing precedents already determine the seam, behavior, important edge cases, and verification path. The executor mainly carries out known work.
-- **Hard**: the executor must still explore alternatives, choose seams, reconcile constraints, or design substantial tests while implementing. The prompt must explicitly grant that autonomy and identify the decisions that remain local to the ticket.
-
-Do not classify by line count, number of files, wall-clock time, or domain sophistication. `ready-for-agent` and difficulty are independent: the label says unattended execution is allowed, while easy/hard selects how much autonomous judgment that execution needs. If a product or specification decision is still open, the ticket is not merely hard; it is not ready for AFK execution and must return to `ready-for-human` for a HITL planning step.
+Green light means the delivery meets every criterion written down before handback (issue acceptance criteria, prompt contract, DoD baseline, repo hard constraints); acceptance cannot fail a delivery on after-the-fact requirements, and any surprise finding must be codified into the docs before further dispatch of the same kind. The full workflow, prompt contract, DoD baseline, and bounded escalation chain live in `docs/agents/issue-tracker.md`.
 
 ## Parallel dispatch: machine-level shared state
 
