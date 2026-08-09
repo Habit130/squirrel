@@ -89,6 +89,23 @@ Every execution prompt must be self-contained. It must name the issue title and 
 
 A repair prompt must additionally name the current branch and PR, quote the blocking acceptance findings with primary-artifact references, state the failure classification and remaining attempt, and require the new executor to verify the issue and current artifacts independently. Give an escalated or recovery executor the original requirements and current artifacts, not the previous executor's reasoning as assumed fact. A completion summary is only a lead to inspect.
 
+### Definition of done (the green-light contract)
+
+Green light means the delivery satisfies every criterion that was written down before handback. A passing delivery is expected to be accepted, not re-litigated. Every ticket is measured against two layers:
+
+**Repo-wide baseline** — applies to every ticket; the execution session self-checks it before handback:
+
+- The issue's acceptance criteria are met one by one, and the handback names the evidence for each.
+- The build path the change requires succeeds (`AGENTS.md` "Build"): the fast path for frontend-only work, the from-source path for anything under `librime/`.
+- `swiftlint` and `periphery scan` are clean for any change under `sources/`.
+- Behavior or constraint changes are synced into the docs that carry them (`AGENTS.md`, `CONTEXT.md`, an ADR, or the constrained file's own comments) in the same delivery.
+- No scope creep: everything outside the issue's acceptance criteria is either untouched or explicitly recorded as deferred.
+- The PR description carries motivation, change summary, and verification evidence.
+
+**Ticket-specific criteria** — the issue body's acceptance criteria plus whatever the execution prompt adds (seams, verification commands, handback artifacts).
+
+Criteria that were never written down cannot fail a delivery; the enforcement rule is in "Acceptance workflow" below.
+
 ### Acceptance workflow
 
 The orchestration session performs acceptance from primary artifacts, not from the executor's completion summary:
@@ -96,7 +113,7 @@ The orchestration session performs acceptance from primary artifacts, not from t
 1. Re-read the issue body, blockers, later clarifications, linked spec/ADR terms, and every commit in the PR.
 2. Review the diff for behavioral correctness, scope expansion, privacy and failure semantics, concurrency or lifecycle risks, and missing tests. Check deferred work really belongs to another ticket.
 3. Re-run the relevant deterministic checks when the machine state is available. Treat reported timing or live-input results as evidence to audit, not automatically reproducible facts; verify their fixtures and environment.
-4. Fail acceptance only for a blocking finding: unmet acceptance criteria, a repository hard-constraint violation, a correctness, privacy, security, concurrency, or lifecycle risk, or missing required verification. Style preferences, optional refactors, and correctly deferred scope are non-blocking and must not consume an escalation attempt.
+4. Fail acceptance only for a blocking finding, and every blocking finding must map to a criterion that existed before handback: the issue's acceptance criteria, the execution prompt's contract, the repo-wide DoD baseline above, or a hard constraint in `AGENTS.md`. The only exception is objective breakage that needs no written criterion: a failing build, a leaked secret, or a demonstrable correctness, privacy, security, or concurrency defect. A finding that maps to nothing pre-written is recorded as non-blocking, however real — and triggers the feedback rule below. Style preferences, optional refactors, and correctly deferred scope are non-blocking and must not consume an escalation attempt.
 5. If acceptance passes, record the checklist and evidence on the issue and mark the PR ready for the user to squash-merge. Do not merge for the user. Close the implementation issue only after its code PR is verifiably in the correct default branch, or immediately for a non-code deliverable whose acceptance itself completes the ticket.
 
 Classify failed acceptance before choosing the next route, and cite the evidence for the classification:
@@ -110,15 +127,13 @@ The bounded escalation sequence is: one initial attempt; at most one same-level 
 
 Persist handback conclusions, blocking findings, failure classifications, routing decisions, and final acceptance evidence on the issue or PR. Keep concrete model identities, prices, and full prompt text in the session handoff rather than the long-lived project rules.
 
+### Feed surprise findings back into the criteria
+
+If acceptance surfaces a finding that no pre-written criterion covered, the orchestration session must codify it before dispatching further tickets of the same kind — into the DoD baseline, an `AGENTS.md` hard constraint, `CONTEXT.md`, or the constrained file's own comments, through the usual branch + PR flow. A surprise happens once; the next time it is a written criterion. Record the codification (PR or commit reference) on the issue alongside the finding.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
-
-When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
-
-- **Read a PR**: `gh pr view <number> --comments` and `gh pr diff <number>` for the diff.
-- **List external PRs for triage**: `gh pr list --state open --json number,title,body,labels,author,authorAssociation,comments` then keep only `authorAssociation` of `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, or `NONE` (drop `OWNER`/`MEMBER`/`COLLABORATOR`).
-- **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
 
 GitHub shares one number space across issues and PRs, so a bare `#42` may be either — resolve with `gh pr view 42` and fall back to `gh issue view 42`.
 
