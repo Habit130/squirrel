@@ -42,6 +42,28 @@ So `gh repo set-default Habit130/squirrel` stays correct for every `gh issue` ca
 
 An orchestration session coordinates issue delivery rather than implementing the tickets it dispatches. Its scope is to inspect the live frontier, prepare prompts for execution sessions, prevent shared-state collisions, and independently accept or reject returned work. Keep feature implementation and orchestration in separate sessions so the acceptance pass does not inherit the executor's assumptions.
 
+### Roles, scope, and delivery states
+
+The **orchestration scope** is the set of issues the session currently coordinates. It is task-dependent rather than fixed to one issue, one map, or the whole project. The orchestration session proposes the included issues and explicit exclusions; the owner confirms the scope and any later expansion. An issue cannot belong to two active orchestration scopes. Replacing the orchestration session requires an explicit handoff of the scope, live frontier, active execution sessions, branches and PRs, consumed attempts, outstanding findings, and shared-state allocations; the replacement must still refresh the live state before acting.
+
+The **orchestration session** must be capable of independently understanding and accepting the highest-judgment work in its scope. It shapes work for cost-effective execution, writes self-contained execution prompts, diagnoses failed acceptance, and recommends the required executor capability. It never implements or repairs a dispatched issue, either directly or by starting an implementation subagent. The owner starts every implementation session by transferring the prompt to a separately chosen agent.
+
+An **execution chain** contains the attempts to deliver one issue. For a code delivery, every attempt continues on the same feature branch and PR. Only one implementation session may write to a delivery at a time. The previous writer must hand back and release it, or the owner must explicitly terminate that session, before another executor takes over. Different issues may proceed concurrently only after their worktrees and machine-level shared state have been separated.
+
+The chain can use three executor roles:
+
+- The **initial executor** gets the lowest-cost capability that is sufficient for the shaped ticket, with a bias toward the less capable agent when multiple levels are sufficient.
+- The **escalated repairer** is a fresh session at a genuinely higher available capability level. It takes over after acceptance exposes a capability mismatch.
+- The **recovery executor** is a fresh session at least as capable as the orchestration tier. It is the final planned repair level.
+
+These are stable roles, not model names. The prompt states the capability requirement and its rationale; the owner binds a currently available model when starting the session. Skip any level below the ticket's known minimum requirement, and never describe a same-level retry as a capability upgrade. If no higher sufficient level is available, the issue requires an owner decision.
+
+Use these delivery states precisely:
+
+- **Handback**: an executor returns the requested artifacts for review. This is not proof of correctness.
+- **Accepted**: the orchestration session independently verifies the delivery and marks the PR ready for the owner to squash-merge.
+- **Completed**: the code PR is verifiably in the correct default branch. For a non-code deliverable, acceptance itself may complete the issue.
+
 ### Classify execution autonomy
 
 Classify every ticket at dispatch time by how much implementation judgment remains:
@@ -49,17 +71,23 @@ Classify every ticket at dispatch time by how much implementation judgment remai
 - **Easy**: the issue, spec, ADRs, and code precedents already fix the implementation seam, required behavior, important edge cases, and verification path. The execution session mainly follows established decisions.
 - **Hard**: the issue is ready to build, but the execution session must still explore the codebase, choose among valid implementation seams, reconcile competing constraints, or design non-obvious tests. Give it broad end-to-end ownership within the issue boundary.
 
-Difficulty does not measure code volume, duration, or technical prestige. A large mechanical migration can be easy; a small change with an ambiguous lifecycle seam can be hard. This classification is also separate from triage readiness: `ready-for-agent` permits unattended work, while easy/hard determines the executor autonomy the prompt should request. A ticket with an unresolved product or specification decision is not hard-AFK; remove it from the AFK frontier and resolve that decision with the owner first.
+Difficulty does not measure code volume, duration, or technical prestige. A large mechanical migration can be easy; a small change with an ambiguous lifecycle seam can be hard. Before classifying it, the orchestration session should make the prompt cheaper to execute by gathering known facts, narrowing or splitting scope, and identifying already-decided seams and verification paths. It must not silently make an unresolved product decision or pretend that genuine implementation judgment is mechanical.
+
+Difficulty is separate from triage readiness: `ready-for-agent` permits unattended work, while easy/hard determines the executor autonomy and minimum capability the prompt should request. A ticket with an unresolved product or specification decision is not hard-AFK; remove it from the AFK frontier, apply `ready-for-human`, and resolve that decision with the owner first.
 
 ### Dispatch workflow
 
 1. Refresh `origin`, the parent issue's sub-issues, native dependency counts, assignees, open PRs, and recent issue comments. Never dispatch from a stale body alone.
 2. Filter to open, unblocked, unclaimed implementation tickets carrying `ready-for-agent`. Exclude specs, maps, and HITL tickets.
 3. Determine the code repository and branch base, then allocate exclusive machine-level state listed in `AGENTS.md` before parallel work starts.
-4. Classify the ticket as easy or hard and state the reason in the handoff. Do not persist this as a label; reassess it whenever the issue or its blockers change.
-5. Give the execution session one issue only. Require it to claim the issue before writing, keep scope to that issue and its explicit acceptance criteria, implement and verify end to end, open the code PR in the correct repository, and leave both PR and issue open for independent acceptance.
+4. Shape the execution prompt, classify the resulting ticket as easy or hard, and state the reason. Do not persist difficulty as a label; reassess it whenever the issue, prompt, or blockers change.
+5. Select the lowest sufficient capability requirement. Lower cost wins only among levels that can exercise the remaining judgment; a known-hard ticket does not take a deliberately insufficient attempt merely to start cheaply.
+6. Give the execution session one issue only. Require the initial executor to claim it before writing, keep scope to that issue and its explicit acceptance criteria, implement and verify end to end, open the code PR in the correct repository, and leave both PR and issue open for independent acceptance.
+7. Return the prompt to the owner to start the execution session. The orchestration session does not start an implementation subagent itself.
 
-Every execution prompt must name the issue title and URL, autonomy class and rationale, source repository, required context documents, accepted scope and deferred scope, shared-state ownership, verification commands or evidence expected, and the exact handback artifacts. For an easy ticket, instruct the session to follow the specified path and stop for genuine ambiguity. For a hard ticket, authorize local engineering decisions within the acceptance boundary and require those decisions and tradeoffs in the handback.
+Every execution prompt must be self-contained. It must name the issue title and URL, autonomy class and rationale, source repository and branch base, required context documents, accepted and deferred scope, established seams and remaining executor decisions, shared-state ownership, branch and PR rules, verification commands or evidence expected, and the exact handback artifacts. For an easy ticket, instruct the session to follow the specified path and stop for genuine ambiguity. For a hard ticket, authorize local engineering decisions within the acceptance boundary and require those decisions and tradeoffs in the handback.
+
+A repair prompt must additionally name the current branch and PR, quote the blocking acceptance findings with primary-artifact references, state the failure classification and remaining attempt, and require the new executor to verify the issue and current artifacts independently. Give an escalated or recovery executor the original requirements and current artifacts, not the previous executor's reasoning as assumed fact. A completion summary is only a lead to inspect.
 
 ### Acceptance workflow
 
@@ -68,8 +96,19 @@ The orchestration session performs acceptance from primary artifacts, not from t
 1. Re-read the issue body, blockers, later clarifications, linked spec/ADR terms, and every commit in the PR.
 2. Review the diff for behavioral correctness, scope expansion, privacy and failure semantics, concurrency or lifecycle risks, and missing tests. Check deferred work really belongs to another ticket.
 3. Re-run the relevant deterministic checks when the machine state is available. Treat reported timing or live-input results as evidence to audit, not automatically reproducible facts; verify their fixtures and environment.
-4. If acceptance fails, leave concrete findings with file or commit references and keep the issue and PR open for the same execution session to revise.
+4. Fail acceptance only for a blocking finding: unmet acceptance criteria, a repository hard-constraint violation, a correctness, privacy, security, concurrency, or lifecycle risk, or missing required verification. Style preferences, optional refactors, and correctly deferred scope are non-blocking and must not consume an escalation attempt.
 5. If acceptance passes, record the checklist and evidence on the issue and mark the PR ready for the user to squash-merge. Do not merge for the user. Close the implementation issue only after its code PR is verifiably in the correct default branch, or immediately for a non-code deliverable whose acceptance itself completes the ticket.
+
+Classify failed acceptance before choosing the next route, and cite the evidence for the classification:
+
+- **Local defect**: the seam and approach remain valid, and the finite corrections require no new design judgment. After the initial handback, return a focused repair prompt for at most one same-level revision. If the initial session is unavailable, a new session at the same sufficient capability may consume that same revision slot. A defect found after a later takeover does not create another revision slot.
+- **Capability mismatch**: the work shows insufficient exploration, judgment, integration of constraints, or autonomous diagnosis. Skip to the next genuinely higher sufficient capability.
+- **Specification blocker**: the next step needs a product, scope, or acceptance decision. Remove `ready-for-agent`, apply `ready-for-human`, record the open decision, and stop the execution chain.
+- **Execution-environment blocker**: tooling, platform, credentials, or allocated shared state prevents a fair attempt. Pause and resolve the blocker without consuming a repair attempt.
+
+The bounded escalation sequence is: one initial attempt; at most one same-level revision for a local defect; one takeover by an escalated repairer; and one takeover by a recovery executor. Any stage that passes acceptance ends the chain. An escalated or recovery executor gets one complete takeover, not an unbounded review loop. If the recovery attempt fails, or the chain already uses the highest available sufficient capability, remove `ready-for-agent`, apply `ready-for-human`, and report the failed attempts, unresolved findings, and recommended owner decision.
+
+Persist handback conclusions, blocking findings, failure classifications, routing decisions, and final acceptance evidence on the issue or PR. Keep concrete model identities, prices, and full prompt text in the session handoff rather than the long-lived project rules.
 
 ## Pull requests as a triage surface
 

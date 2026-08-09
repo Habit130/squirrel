@@ -145,14 +145,16 @@ patch:
 
 ## Session roles for issue delivery
 
-Long implementation trains may designate one session as the **orchestrator**. That session inventories the issue frontier, checks dependencies and shared-state ownership, classifies each ticket by the autonomy its executor needs, writes the execution prompt, and independently accepts the result. It does not implement the dispatched ticket or treat the executor's summary as proof.
+An issue-delivery task may designate one sufficiently capable session as the **orchestrator** over an owner-confirmed, task-dependent scope. That session inventories the issue frontier, checks dependencies and shared-state ownership, shapes and classifies each ticket, writes a self-contained execution prompt, and independently accepts the result from primary artifacts. It neither implements the dispatched ticket nor starts an implementation subagent; the owner starts every implementation session by transferring the prompt to a separately chosen agent.
+
+Each execution session handles one issue, with one active writer on its branch and PR. Request the lowest-cost capability sufficient for the remaining judgment, biasing toward the less capable option when several are sufficient; name capability requirements, never concrete models, in the persistent workflow. Acceptance failures are classified before routing. A bounded chain may use one initial attempt, one same-level correction for a local defect, one genuinely higher-capability repairer, and one fresh recovery executor at least as capable as the orchestration tier; skip known-insufficient levels. All implementation sessions are owner-started, and exhaustion or a missing higher sufficient level returns the issue to `ready-for-human`. The exact workflow and prompt contract live in `docs/agents/issue-tracker.md`.
 
 Execution difficulty is about unresolved implementation judgment at handoff, not estimated effort:
 
 - **Easy**: the issue and existing precedents already determine the seam, behavior, important edge cases, and verification path. The executor mainly carries out known work.
 - **Hard**: the executor must still explore alternatives, choose seams, reconcile constraints, or design substantial tests while implementing. The prompt must explicitly grant that autonomy and identify the decisions that remain local to the ticket.
 
-Do not classify by line count, number of files, wall-clock time, or domain sophistication. `ready-for-agent` and difficulty are independent: the label says unattended execution is allowed, while easy/hard selects how much autonomous judgment that execution needs. If a product or specification decision is still open, the ticket is not merely hard; it is not ready for AFK execution and must return to a HITL planning step. See `docs/agents/issue-tracker.md` for the dispatch and acceptance workflow.
+Do not classify by line count, number of files, wall-clock time, or domain sophistication. `ready-for-agent` and difficulty are independent: the label says unattended execution is allowed, while easy/hard selects how much autonomous judgment that execution needs. If a product or specification decision is still open, the ticket is not merely hard; it is not ready for AFK execution and must return to `ready-for-human` for a HITL planning step.
 
 ## Parallel dispatch: machine-level shared state
 
