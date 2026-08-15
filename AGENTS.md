@@ -1,130 +1,49 @@
 # AGENTS.md
 
-Guidance for coding agents working in this repository. The machine-global `~/.config/opencode/AGENTS.md` applies; this file holds repo-specific overrides and hard-earned facts. (`CLAUDE.md` is a pointer here.)
+The machine-global `~/.config/opencode/AGENTS.md` applies. This file contains only Squirrel-specific boundaries, role overrides, and context routing. `CLAUDE.md` points here.
 
-## What this repository is
+## Repository boundary
 
-Squirrel (鼠鬚管) is the **macOS front-end** for Rime — an InputMethodKit (IMK) app written in Swift/AppKit. It talks to **librime**, the actual input-method engine (C++), through a C API. Squirrel receives an already-ranked candidate list from librime via `get_context` and only renders/paginates/highlights it; it does not generate or sort candidates itself (verified: there is no ranking/weight/sort/compare logic anywhere under `sources/`).
+- Squirrel is the macOS Swift/AppKit frontend for Rime. It receives an already-ranked candidate list from librime and renders, paginates, and highlights it.
+- Candidate generation, scoring, and reranking do not belong in `sources/`. Read `docs/agents/domain.md` before ranking work.
+- The custom reranker is implemented in `Habit130/librime-llm-rerank`, not in this repository or a submodule. Issues, specifications, decisions, and dependency edges remain in `Habit130/squirrel`; code PRs go to the plugin repository.
 
-This matters for this project's planned direction of building a custom candidate-ranking algorithm: **that work does not belong in this repo's Swift code.** Read "Where candidate ranking actually lives" below before starting it.
+## Session roles
 
-## Git remotes and workflow (project override)
+Squirrel issue delivery overrides the global single-Agent division of work. A writing session must have one of these roles in its initiating prompt:
 
-- `origin` = personal fork, `https://github.com/Habit130/squirrel` — the only write remote and PR target.
-- `upstream` = official project, `https://github.com/rime/squirrel` — read-only reference. This fork intentionally diverges: do not routinely merge or rebase `upstream`; selectively port relevant fixes through a feature branch and PR. **Never push or open a PR against `upstream`.**
-- The default branch is **`master`** (not `main`). Fetch `origin`, then create feature branches directly from `origin/master`; a local `master` must track `origin/master`, never `upstream/master`. All changes go through PRs, and the user squash-merges on GitHub.
-- GitHub permits squash merge only and protects `master` with a PR-only ruleset. Automatic head-branch deletion stays disabled because this repository uses stacked PRs.
-- Starting new work while the current branch holds a complete work unit without an open PR: open that PR first, then create the new branch stacked on top of it. Branch from `origin/master` only when the previous work is already merged.
-- Branch prefixes follow the global convention (`feat/`/`fix/`/`docs/`/`refactor/`/`chore/`), Conventional Commits in English, no auto-merge, no force-push.
-- `gh` does not reliably infer the fork as default repo (two remotes); it is pinned via `gh repo set-default Habit130/squirrel`. Verify with `gh repo set-default --view` before any write — see `docs/agents/issue-tracker.md`.
+- **Orchestration (main) session**: maintains an owner-confirmed scope and may write only orchestration artifacts: issues and tracker state, specifications, ADRs, roadmaps, Agent guidance, execution prompts, handback records, and acceptance records. It never implements or repairs a dispatched product-code issue.
+- **Execution session**: is started by the owner from a frozen execution prompt, handles one issue, and is the only active writer for that issue's branch and PR.
 
-## Plugin source repository
+An acceptance subagent is an optional read-only helper of the orchestration session, not a third delivery role. The orchestration session decides before dispatch whether to use one, records the reason, and remains the final decision-maker. Review depth may increase; the frozen acceptance standard may not.
 
-The candidate-reranking plugin implementation, including later-phase tickets tracked in this repo, is **not** in this repo and is not a submodule of it. Its source repo is **`Habit130/librime-llm-rerank`**, created by #17. Two ways to get the plugin binary, one per build path:
+If a writing task's role is unclear, resolve the role with the owner before editing. Read `docs/agents/issue-tracker.md` for the complete dispatch, frozen-contract, handback, acceptance, and escalation protocol.
 
-- **Fast path**: `action-install.sh` downloads a **pinned release artifact** — a universal `librime-llm-rerank.dylib` built by that repo's tag-triggered release workflow against the exact librime revision pinned here (`rime_version`/`rime_git_hash`), verified by pinned sha256 — and drops it into `lib/rime-plugins/`.
-- **From-source path**: `librime/install-plugins.sh Habit130/librime-llm-rerank`, which strips the `librime-` prefix and lands it at `librime/plugins/llm-rerank`, where librime's CMake auto-discovers it.
+## Git remotes and workflow
 
-- **Code PRs go to that repo**; issues, the map, the spec and all blocking edges stay on `Habit130/squirrel` (`docs/agents/issue-tracker.md`).
-- The same git-flow convention applies inside it (prefix branches, Conventional Commits, PR against its default branch, no auto-merge, no force-push).
-- It must carry its own agent-instruction file (an acceptance item of #17) — the scope constraint (简体 only), the code-style precedents, the `make librime` rule, and pointers back here for `CONTEXT.md` vocabulary and the issue tracker. A session working there does not get this file.
+- `origin` = `https://github.com/Habit130/squirrel`, the only write remote and PR target.
+- `upstream` = `https://github.com/rime/squirrel`, read-only reference. Never push or open a PR against it; do not routinely merge or rebase it into this intentionally divergent fork.
+- The protected default branch is `master`. Fetch `origin`, then create feature branches from `origin/master`; local `master` tracks `origin/master`, never `upstream/master`.
+- All changes use feature branches and PRs. The owner squash-merges on GitHub; no auto-merge or force-push. Automatic head-branch deletion stays disabled because stacked PRs are used.
+- If the current branch holds a complete work unit without an open PR, open that PR before stacking new work on it. Branch from `origin/master` only after the prior work is merged.
+- Follow the global branch prefixes and English Conventional Commits.
+- Before any `gh` write, run `gh repo set-default --view`; it must report `Habit130/squirrel`. See `docs/agents/issue-tracker.md`.
 
-## Build
+## Context router
 
-There are two very different build paths. Know which one a task needs:
+Load detailed guidance only when the task triggers it:
 
-**Fast path — prebuilt librime (what CI and most day-to-day frontend work use):**
+| Task | Required context |
+| --- | --- |
+| Issue shaping, dispatch, handback, acceptance, escalation, or parallel execution | `docs/agents/issue-tracker.md` |
+| Triage or tracker labels | `docs/agents/triage-labels.md` |
+| Build, dependency, plugin installation, packaging, manifests, or CI validation | `docs/agents/build.md` |
+| Swift/IMK frontend, lifecycle, key handling, candidate UI, or manual validation | `SKILL.md` |
+| Candidate ranking, semantic memory, LM integration, or plugin/frontend boundaries | `docs/agents/domain.md`, then the relevant parts of `CONTEXT.md` and `docs/adr/` |
+| `data/luna_pinyin.custom.yaml` | Read that file's constraint header before editing; it is the deployment truth source |
 
-```sh
-./action-install.sh   # downloads a prebuilt librime.1.dylib + Sparkle.framework release into lib/ and Frameworks/,
-                      # plus the pinned librime-llm-rerank.dylib release artifact into lib/rime-plugins/
-make                   # = make release; links against the prebuilt dylib, does NOT compile librime/ at all
-```
+Do not preload every linked document. Follow the row that matches the work and any further required-reading instructions it contains.
 
-`make`'s dependency rule for the dylib (`$(RIME_LIBRARY)`) has no prerequisites, so it only checks whether `lib/librime.1.dylib` exists — not whether `librime/` source changed. **Editing files under `librime/` has zero effect on the built app on this path.** The same holds for the llm-rerank plugin: the fast path always uses the pinned release artifact from `action-install.sh`, so plugin source changes only take effect on this path after a new plugin release is tagged and the pin in `action-install.sh` is bumped (`llm_rerank_version`/`llm_rerank_sha256`).
+## Shared-state gate
 
-`package/add_data_files` (run by `make release`/`debug` before every xcodebuild, `Makefile:107,112`) registers bundled data and plugins into `Squirrel.xcodeproj/project.pbxproj` — but only files on the **explicit contract manifests** `package/data_files_manifest` and `package/rime_plugins_manifest`. Anything in `data/plum/` or `lib/rime-plugins/` that is not on the manifest (e.g. a zh-hans gram left over from an old octagram-data recipe) is **warned about on stderr and never registered**, so local build output can no longer pollute the project file (#99). Keep the manifests in sync when the bundled recipes (`SQUIRREL_BUNDLED_RECIPES` in `action-build.sh`, or plum defaults) or the librime release's plugin set change; the script also warns when a manifest-listed file is missing from `data/plum/`/`lib/rime-plugins/` — the signal to drop the stale entry from manifest *and* pbxproj (the #95 bug family).
-
-**From-source path — required for any librime/engine change (this includes ranking-algorithm work):**
-
-```sh
-git submodule update --init --recursive librime plum   # BOTH — plum is not optional here, see below
-export BOOST_ROOT=/opt/homebrew/opt/boost   # `brew install boost` is enough for local dev; see INSTALL.md for the portable/universal option
-export MACOSX_DEPLOYMENT_TARGET=13.0        # NOT optional on recent Xcode — see gotcha below
-make clean               # required if action-install.sh ran before and left a prebuilt lib/librime.1.dylib
-make                     # $(RIME_LIBRARY) is now missing, so the `librime` target builds it from submodule source
-                          # (make -C librime deps && make -C librime release install), then copies it into lib/, bin/
-```
-
-**`plum` must be initialized on this path even when you have no intention of touching schema data.** `make clean` deletes `data/plum/*` and `bin/*` (`Makefile:178-185`), and `bin/rime-install` plus three `data/plum/` files *are* `$(PLUM_DATA)` (`Makefile:17-20`), which `$(DEPS_CHECK)` requires (`Makefile:26`). With those files gone the next `make` runs the `plum-data` target, which shells out to `make -C plum` (`Makefile:60-71`) — and that fails outright if `plum/` is an empty submodule directory. Since `make clean` is a required step above, `plum` is a required checkout. (An already-populated `plum/` masks this, which is why a machine that once ran the fast path can build without noticing.)
-
-Other targets: `make debug`, `make package` (produces a `.pkg`; set `DEV_ID` for codesigning/notarization), `make install` / `make install-debug` / `make install-release` (installs to `/Library/Input Methods/Squirrel.app`; needs sudo on first install), `make clean` / `make clean-deps` / `make clean-package`.
-
-### From-source build gotchas (verified against Xcode 27 beta / macOS 27 SDK)
-
-These bit a real from-source build attempt and cost significant time to root-cause. All stem from Make's dependency checks being file-existence-only, and CMake caching configure-time values — neither notices when *inputs* change if the *output* is already there.
-
-- **`librime/Makefile` defaults `MACOSX_DEPLOYMENT_TARGET ?= 10.15`.** Recent Xcode/macOS SDKs have dropped libc++ support below macOS 11.0, and `leveldb`'s vendored CMake build enables `-Werror`, so the resulting availability warning becomes a hard compile error (`"The selected platform is no longer supported by libc++."`) — while `glog`/`googletest` silently only warn, hiding the same problem. Fix: always `export MACOSX_DEPLOYMENT_TARGET=13.0` (matching the project's own supported floor) before building librime from source.
-- **CMake caches the deployment target per dependency on first configure.** If a `librime/deps/<dep>/build/` directory was already configured once (e.g. from a failed attempt before the env var was set correctly), re-running `make` with the env var fixed will *not* retroactively fix it — `cmake .` reuses the existing `CMakeCache.txt`. Fix: `make -C librime -f deps.mk clean-src` (wipes `deps/*/build/` only, not the installed `librime/lib`/`librime/include` outputs) before rebuilding.
-- **`librime`/`copy-rime-binaries` are `.PHONY`, but the top-level `$(RIME_LIBRARY)` prerequisite check is not.** Once `lib/librime.1.dylib` exists, plain `make`/`make debug` will skip the entire librime build+copy step again — even after you change librime source or add plugins. Force it with `make librime` directly.
-- **Plugins need two separate fetch steps, not one.** `librime/install-plugins.sh <owner>/librime-<name> ...` clones each plugin into `librime/plugins/<name>`, which librime's CMake auto-discovers (`file(GLOB ...)` in `librime/plugins/CMakeLists.txt`) and builds into `lib/rime-plugins/*.dylib` — but only on a build that actually re-enters `make librime` (see previous point). `librime-lua` additionally vendors its Lua 5.4 source on a separate `thirdparty` git branch of the same repo; run `(cd librime/plugins/lua && bash action-install.sh)` after cloning it, or its CMake configure fails to find a Lua to link against. On the fast path these two fetch steps don't apply at all — `action-install.sh` installs the prebuilt plugins from the librime release, and `librime-llm-rerank` specifically from its pinned release artifact (see "Plugin source repository").
-
-## Lint and validation
-
-```sh
-swiftlint                              # lints sources/ per .swiftlint.yml; required by CI
-periphery scan --relative-results --skip-build --index-store-path build/Index.noindex/DataStore   # dead-code scan; run after a make build (index store is always on)
-```
-
-There is no unit test target in the Xcode project (IMK apps are hard to unit-test in isolation). Validation is `swiftlint` + `periphery` + a full Xcode build + manually exercising the input method — see SKILL.md's "Validation Checklist" for the specific scenarios (activation/deactivation, ASCII toggle, schema switching, candidate selection/paging, inline/non-inline preedit, vertical/linear layout, deploy/sync, quit/logout cleanup). CI (`.github/workflows/`) runs exactly: swiftlint → `./action-build.sh package` → periphery, on macos-26 / Xcode 26.5.
-
-To run it live: `make install-debug` or `make install-release`, then select "鼠鬚管" in System Settings > Keyboard > Input Sources. macOS (not Xcode) launches the IMKServer process, so use Xcode's Debug > Attach to Process on the running Squirrel process rather than Run.
-
-## Architecture
-
-For the detailed Swift/IMK frontend architecture — process startup, session lifecycle, the `handle()` key-event loop, marked-text/commit rules, candidate panel flow, config model, notifications — **read `SKILL.md` at the repo root**; it's accurate and detailed.
-
-Layering, top to bottom:
-
-- **`sources/*.swift`** — the whole frontend: IMK controller, candidate panel, theme/config, key mapping. UI, key-handling, and display-formatting changes go here.
-- **`librime/`** — git submodule, the Rime engine (C++). Dictionaries, user dictionaries, translators, and candidate scoring/ranking all live here. Not checked out by default (see Build).
-- **`plum/`** — git submodule, Rime's schema/data package manager (`rime-install`). Fetches input schemas and data recipes, e.g. `data/plum/default.yaml` and the grammar-model data package used by octagram (see below).
-- **`data/squirrel.yaml`** — checked-in default frontend settings (panel style, keyboard layout, notifications). `data/plum/` and `data/opencc/` are gitignored build outputs populated by `make data` / `action-install.sh`.
-- **`lib/`, `bin/`, `Frameworks/`** — gitignored, populated by the build (librime dylib + plugins, `rime_deployer`/`rime_dict_manager`, Sparkle.framework).
-
-## Where candidate ranking actually lives
-
-Nothing in `sources/` reorders candidates. For ranking work, the relevant layers — all outside this repo's Swift code — are:
-
-1. **librime core** (the `librime` submodule) — base dictionary/user-dictionary weights and candidate merging. Needs the from-source build above to iterate on.
-2. **librime-octagram** — the grammar/n-gram reranking plugin. Three separate pieces all need to be present to matter: the plugin binary (bundled in the prebuilt librime release per CHANGELOG: "compiled with lua, octagram and predict plugins"), the grammar data (`action-build.sh`'s `SQUIRREL_BUNDLED_RECIPES` installs `lotem/rime-octagram-data`, which on a clean environment ships only `grammar.yaml`, plus `lotem/rime-octagram-data@hant` for the zh-hant gram files; there is no zh-hans gram package), and a schema that actually enables the grammar. This is the closest existing prior art for "improve candidate ordering" and is worth reading first.
-3. **librime-lua** — also bundled by default; lets you write a Lua `filter`/`translator` that reorders the candidate list from schema config, without recompiling C++. Likely the lowest-friction place to prototype a new algorithm.
-4. **librime-predict** — bundled next-word-prediction plugin.
-
-None of plugins 2-4's source lives in this repository; they're separate repos, normally installed as prebuilt binaries into `lib/rime-plugins/` (fast path) or via `librime/install-plugins.sh <repo-slug>` for a source build (see INSTALL.md).
-
-The only ranking-adjacent surface on the Squirrel side is `sources/ReservedProperty.swift`: a librime→frontend property protocol plugins use to send UI *hints* (e.g. `_comment_highlight`/`_comment_warning` to color specific candidate indices by index). It's cosmetic and doesn't affect order — it just reflects whatever a plugin's reranking already decided.
-
-## The llm_rerank_recorder deployment
-
-`data/luna_pinyin.custom.yaml` ships the recorder into luna_pinyin. All deployment constraints — processor-chain order, component-construction order, the residual key-binder window, user-override behavior, and the user enablement recipe — are documented in that file's header comments; read them before touching the file. Delivery chain for anyone changing it: `copy-plum-data` (Makefile) → `package/add_data_files` → librime schema-compiler resolution of `luna_pinyin.custom:/patch?` (user data dir first, app-bundled shared dir as fallback).
-
-## Session roles for issue delivery
-
-An issue-delivery task may designate one session as **orchestrator** over an owner-confirmed scope: it shapes tickets, writes self-contained execution prompts, and accepts results from primary artifacts. It never implements a dispatched ticket and never starts an implementation subagent; the owner starts every execution session, one issue per session, one active writer per branch/PR.
-
-Green light means the delivery meets every criterion written down before handback (issue acceptance criteria, prompt contract, DoD baseline, repo hard constraints); acceptance cannot fail a delivery on after-the-fact requirements, and any surprise finding must be codified into the docs before further dispatch of the same kind. The full workflow, prompt contract, DoD baseline, and bounded escalation chain live in `docs/agents/issue-tracker.md`.
-
-## Parallel dispatch: machine-level shared state
-
-Sessions working different tickets in parallel contend on state that git does not track. Before dispatching more than one at a time, assign each of these to exactly one session:
-
-- **The librime build tree** (`librime/build/`, `librime/plugins/`, `lib/`, `bin/`) — owned exclusively by whichever ticket runs `install-plugins.sh` or `make librime`. Anything that merely *uses* a built binary (e.g. `rime_api_console`) must copy it out first, or it gets swapped mid-run. Remember `$(RIME_LIBRARY)` is an existence-only check: once `lib/librime.1.dylib` exists, plain `make` silently skips the librime and plugin build entirely, so plugin work must invoke `make librime` explicitly.
-- **`~/Library/Rime`** — the live deployment. `luna_pinyin.userdb` mutates on every keystroke, and a redeploy rewrites `build/*.schema.yaml` under any session that is mid-verification. Eval and baseline work deploys into its own throwaway `rime_dir`; only live-typing verification touches the real one, and never while another session is redeploying.
-- **A quiet machine, for timing numbers only** — a latency measurement taken while a 10-core librime build is running is contaminated in the pessimistic direction. Any ticket whose deliverable is a duration gets the machine to itself.
-
-## Agent skills config
-
-- **Issue tracker**: GitHub Issues on `origin` (`Habit130/squirrel`) via the `gh` CLI — never `upstream`. See `docs/agents/issue-tracker.md`.
-- **Triage labels**: the five canonical roles, label strings unchanged. See `docs/agents/triage-labels.md`.
-- **Domain docs**: single-context — `CONTEXT.md` (候选词排序 vocabulary, scoped to ranking only) + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Before parallel dispatch, the orchestration session must allocate separate worktrees and exclusive ownership of every applicable machine-level resource documented in `docs/agents/issue-tracker.md`. Do not run concurrent work until those allocations are explicit.
