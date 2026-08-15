@@ -19,7 +19,7 @@ Issues were disabled on the fork (GitHub's default for forks) and have been enab
 ### Tickets whose code lives in another repo
 
 The candidate-reranking plugin, including later-phase implementation tickets, is written in a separate repository — see
-"Plugin source repository" in `AGENTS.md`. The split is:
+"Repository boundary" in `AGENTS.md`. The split is:
 
 - **Issues, map, spec, decisions, blocking edges** — always here, `Habit130/squirrel`. A
   session working in the plugin repo still claims, comments on and closes its ticket here.
@@ -40,29 +40,41 @@ So `gh repo set-default Habit130/squirrel` stays correct for every `gh issue` ca
 
 ## Dispatch and acceptance sessions
 
-An orchestration session coordinates issue delivery rather than implementing the tickets it dispatches. Its scope is to inspect the live frontier, prepare prompts for execution sessions, prevent shared-state collisions, and independently accept or reject returned work. Keep feature implementation and orchestration in separate sessions so the acceptance pass does not inherit the executor's assumptions.
+An orchestration session coordinates issue delivery rather than implementing the tickets it dispatches. Its scope is to inspect the live frontier, prepare prompts for execution sessions, prevent shared-state collisions, and independently accept or reject returned work. Keep product implementation and orchestration in separate sessions so acceptance does not inherit the executor's assumptions.
 
 ### Roles, scope, and delivery states
 
 The **orchestration scope** is the set of issues the session currently coordinates. It is task-dependent rather than fixed to one issue, one map, or the whole project. The orchestration session proposes the included issues and explicit exclusions; the owner confirms the scope and any later expansion. An issue cannot belong to two active orchestration scopes. Replacing the orchestration session requires an explicit handoff of the scope, live frontier, active execution sessions, branches and PRs, consumed attempts, outstanding findings, and shared-state allocations; the replacement must still refresh the live state before acting.
 
-The **orchestration session** must be capable of independently understanding and accepting the highest-judgment work in its scope. It shapes work for cost-effective execution, writes self-contained execution prompts, diagnoses failed acceptance, and recommends the required executor capability. It never implements or repairs a dispatched issue, either directly or by starting an implementation subagent. The owner starts every implementation session by transferring the prompt to a separately chosen agent.
+The **orchestration session** must be capable of independently understanding and accepting the highest-judgment work in its scope. It shapes work for cost-effective execution, writes self-contained execution prompts, diagnoses failed acceptance, and recommends the required executor capability. It may write only orchestration artifacts listed in `AGENTS.md`; it never implements or repairs a dispatched product-code issue, either directly or through a subagent. The owner starts every execution session by transferring the frozen prompt to a separately chosen agent.
 
-An **execution chain** contains the attempts to deliver one issue. For a code delivery, every attempt continues on the same feature branch and PR. Only one implementation session may write to a delivery at a time. The previous writer must hand back and release it, or the owner must explicitly terminate that session, before another executor takes over. Different issues may proceed concurrently only after their worktrees and machine-level shared state have been separated.
+An **execution chain** contains the attempts to deliver one issue. For a code delivery, every attempt continues on the same feature branch and PR. Only one execution session may write to a delivery at a time. The previous writer must hand back and release it, or the owner must explicitly terminate that session, before another executor takes over. Different issues may proceed concurrently only after their worktrees and machine-level shared state have been separated.
 
-The chain can use three executor roles:
+An **acceptance subagent** is an optional read-only helper, not an executor and not a third delivery role. Before dispatch, the orchestration session decides whether independent review is required and records its reason in the acceptance contract. The subagent may inspect more deeply or rerun checks, but it uses the exact frozen contract and cannot add criteria. The orchestration session remains responsible for the final decision.
+
+The chain can use three executor attempt tiers:
 
 - The **initial executor** gets the lowest-cost capability that is sufficient for the shaped ticket, with a bias toward the less capable agent when multiple levels are sufficient.
 - The **escalated repairer** is a fresh session at a genuinely higher available capability level. It takes over after acceptance exposes a capability mismatch.
 - The **recovery executor** is a fresh session at least as capable as the orchestration tier. It is the final planned repair level.
 
-These are stable roles, not model names. The prompt states the capability requirement and its rationale; the owner binds a currently available model when starting the session. Skip any level below the ticket's known minimum requirement, and never describe a same-level retry as a capability upgrade. If no higher sufficient level is available, the issue requires an owner decision.
+These are attempt tiers, not top-level session roles or model names. Every one still runs as an **Execution session**. The prompt states the tier, capability requirement, and rationale; the owner binds a currently available model when starting the session. Skip any level below the ticket's known minimum requirement, and never describe a same-level retry as a capability upgrade. If no higher sufficient level is available, the issue requires an owner decision.
 
 Use these delivery states precisely:
 
 - **Handback**: an executor returns the requested artifacts for review. This is not proof of correctness.
 - **Accepted**: the orchestration session independently verifies the delivery and marks the PR ready for the owner to squash-merge.
 - **Completed**: the code PR is verifiably in the correct default branch. For a non-code deliverable, acceptance itself may complete the issue.
+
+### Allocate shared state before parallel work
+
+Every concurrent issue gets a separate git worktree and exclusive ownership of each applicable machine-level resource:
+
+- **The librime build tree** (`librime/build/`, `librime/plugins/`, `lib/`, `bin/`): one owner for any work that runs `install-plugins.sh` or `make librime`. A consumer that only needs a built binary copies it outside the shared tree first.
+- **The live Rime deployment** (`~/Library/Rime`): one owner for deployment or live-input verification. Eval and baseline work uses a throwaway `rime_dir`; no session redeploys while another is testing the live data.
+- **A quiet machine**: one owner when a ticket's deliverable includes latency or other timing measurements. Builds and unrelated load invalidate that evidence.
+
+Record the allocations in every affected execution prompt. Do not start concurrent work while an ownership edge is unresolved.
 
 ### Classify execution autonomy
 
@@ -79,42 +91,62 @@ Difficulty is separate from triage readiness: `ready-for-agent` permits unattend
 
 1. Refresh `origin`, the parent issue's sub-issues, native dependency counts, assignees, open PRs, and recent issue comments. Never dispatch from a stale body alone.
 2. Filter to open, unblocked, unclaimed implementation tickets carrying `ready-for-agent`. Exclude specs, maps, and HITL tickets.
-3. Determine the code repository and branch base, then allocate exclusive machine-level state listed in `AGENTS.md` before parallel work starts.
+3. Determine the code repository and branch base, then allocate the worktree and exclusive machine-level state above before parallel work starts.
 4. Shape the execution prompt, classify the resulting ticket as easy or hard, and state the reason. Do not persist difficulty as a label; reassess it whenever the issue, prompt, or blockers change.
 5. Select the lowest sufficient capability requirement. Lower cost wins only among levels that can exercise the remaining judgment; a known-hard ticket does not take a deliberately insufficient attempt merely to start cheaply.
-6. Give the execution session one issue only. Require the initial executor to claim it before writing, keep scope to that issue and its explicit acceptance criteria, implement and verify end to end, open the code PR in the correct repository, and leave both PR and issue open for independent acceptance.
-7. Return the prompt to the owner to start the execution session. The orchestration session does not start an implementation subagent itself.
+6. Decide whether the delivery needs an independent acceptance subagent. Record `required` or `not required` and the orchestration session's rationale; there are no automatic risk categories.
+7. Freeze the acceptance contract and execution prompt. Give the execution session one issue only; require it to claim the issue before writing, implement and verify end to end, open the code PR in the correct repository, and leave both PR and issue open for acceptance.
+8. Return the prompt to the owner to start the execution session. The orchestration session does not start an implementation subagent itself.
 
-Every execution prompt must be self-contained. It must name the issue title and URL, autonomy class and rationale, source repository and branch base, required context documents, accepted and deferred scope, established seams and remaining executor decisions, shared-state ownership, branch and PR rules, verification commands or evidence expected, and the exact handback artifacts. For an easy ticket, instruct the session to follow the specified path and stop for genuine ambiguity. For a hard ticket, authorize local engineering decisions within the acceptance boundary and require those decisions and tradeoffs in the handback.
+Every execution prompt must be self-contained. It must designate `Session role: Execution`, name the executor attempt tier, issue title and URL, autonomy class and rationale, source repository and branch base, required context documents, accepted and deferred scope, established seams and remaining executor decisions, shared-state ownership, branch and PR rules, acceptance-contract ID and version, criteria and expected evidence, independent-review decision and rationale, and the exact handback artifacts. For an easy ticket, instruct the session to follow the specified path and stop for genuine ambiguity. For a hard ticket, authorize local engineering decisions within the acceptance boundary and require those decisions and tradeoffs in the handback.
 
-A repair prompt must additionally name the current branch and PR, quote the blocking acceptance findings with primary-artifact references, state the failure classification and remaining attempt, and require the new executor to verify the issue and current artifacts independently. Give an escalated or recovery executor the original requirements and current artifacts, not the previous executor's reasoning as assumed fact. A completion summary is only a lead to inspect.
+A repair prompt must additionally name the current branch and PR, quote the failed contract criterion IDs with primary-artifact references, state the failure classification and remaining attempt, and require the new executor to verify the issue and current artifacts independently. Give an escalated or recovery executor the original contract and current artifacts, not the previous executor's reasoning as assumed fact. A completion summary is only a lead to inspect.
 
-### Definition of done (the green-light contract)
+### Freeze one acceptance contract
 
-Green light means the delivery satisfies every criterion that was written down before handback. A passing delivery is expected to be accepted, not re-litigated. Every ticket is measured against two layers:
+The **acceptance contract** is the single standard used by the executor's self-check, the orchestration session's acceptance, and any acceptance subagent. Freeze it before the execution session starts. Give it an issue-scoped version such as `AC-101-v1` and express ticket-specific requirements as stable criterion IDs:
 
-**Repo-wide baseline** — applies to every ticket; the execution session self-checks it before handback:
+```text
+Criterion ID -> requirement -> expected evidence
+```
 
-- The issue's acceptance criteria are met one by one, and the handback names the evidence for each.
-- The build path the change requires succeeds (`AGENTS.md` "Build"): the fast path for frontend-only work, the from-source path for anything under `librime/`.
-- `swiftlint` and `periphery scan` are clean for any change under `sources/`.
-- Behavior or constraint changes are synced into the docs that carry them (`AGENTS.md`, `CONTEXT.md`, an ADR, or the constrained file's own comments) in the same delivery.
-- No scope creep: everything outside the issue's acceptance criteria is either untouched or explicitly recorded as deferred.
-- The PR description carries motivation, change summary, and verification evidence.
+The contract incorporates the repo-wide baseline and hard constraints as they exist at dispatch, then adds the issue-specific criteria and prompt contract. It uses the stable baseline IDs below and gives a local ID to each applicable hard constraint. Any linked specification, ADR, or issue text that affects acceptance must be quoted into the prompt or pinned to a repository revision and section. No acceptance participant may add or strengthen criteria after seeing the delivery.
 
-**Ticket-specific criteria** — the issue body's acceptance criteria plus whatever the execution prompt adds (seams, verification commands, handback artifacts).
+If a clarification genuinely changes scope, a criterion, or required evidence after dispatch, pause execution. The owner must approve a new contract version, the issue and prompt must record it, and the executor must acknowledge it before work resumes. Acceptance uses that one acknowledged version; a later version is never applied retroactively.
 
-Criteria that were never written down cannot fail a delivery; the enforcement rule is in "Acceptance workflow" below.
+The executor's handback names the acknowledged contract ID and version, then mirrors the contract:
+
+```text
+Criterion ID -> primary evidence -> executor Pass/Fail
+```
+
+It also names the exact branch, PR, commit, verification output, deferred work, and any decisions the prompt left to the executor.
+
+### Repo-wide acceptance baseline
+
+Green light means every criterion in the frozen acceptance contract passes. A passing delivery is accepted rather than re-litigated against a preferred implementation. The repo-wide baseline applies to every ticket and is incorporated into every contract:
+
+- **`BASE-EVIDENCE`**: The handback maps every contract criterion to primary evidence and an executor Pass/Fail result.
+- **`BASE-BUILD`**: Every build path applicable to the delivery succeeds (`docs/agents/build.md`): fast path for frontend-only work, from-source path for anything under `librime/` or a source plugin.
+- **`BASE-LINT`**: `swiftlint` and `periphery scan` are clean for any change under `sources/`.
+- **`BASE-SAFETY`**: The delivery introduces no demonstrable correctness, privacy, security, concurrency, or lifecycle defect; required checks do not fail; no secret or credential is exposed.
+- **`BASE-DOCS`**: Behavior or constraint changes are synced into the docs that carry them (`AGENTS.md`, `docs/agents/*.md`, `SKILL.md`, `CONTEXT.md`, an ADR, or the constrained file's own comments) in the same delivery.
+- **`BASE-SCOPE`**: Everything outside the contract is either untouched or explicitly recorded as deferred.
+- **`BASE-PR`**: A PR-backed delivery's description carries motivation, change summary, and verification evidence.
+
+Ticket-specific criteria come from the issue and the execution prompt: required behavior, established seams, verification commands, evidence, and handback artifacts. The frozen prompt is the self-contained snapshot; later issue edits do not silently alter it.
 
 ### Acceptance workflow
 
 The orchestration session performs acceptance from primary artifacts, not from the executor's completion summary:
 
-1. Re-read the issue body, blockers, later clarifications, linked spec/ADR terms, and every commit in the PR.
-2. Review the diff for behavioral correctness, scope expansion, privacy and failure semantics, concurrency or lifecycle risks, and missing tests. Check deferred work really belongs to another ticket.
+1. Re-read the acknowledged acceptance-contract version, its quoted or revision-pinned spec/ADR terms, blockers, branch, PR, and every commit in the PR.
+2. Review the diff for behavioral correctness, scope expansion, privacy and failure semantics, concurrency or lifecycle risks, and missing tests. These are investigation dimensions, not new standards; every blocking result must still map to a frozen criterion.
 3. Re-run the relevant deterministic checks when the machine state is available. Treat reported timing or live-input results as evidence to audit, not automatically reproducible facts; verify their fixtures and environment.
-4. Fail acceptance only for a blocking finding, and every blocking finding must map to a criterion that existed before handback: the issue's acceptance criteria, the execution prompt's contract, the repo-wide DoD baseline above, or a hard constraint in `AGENTS.md`. The only exception is objective breakage that needs no written criterion: a failing build, a leaked secret, or a demonstrable correctness, privacy, security, or concurrency defect. A finding that maps to nothing pre-written is recorded as non-blocking, however real — and triggers the feedback rule below. Style preferences, optional refactors, and correctly deferred scope are non-blocking and must not consume an escalation attempt.
-5. If acceptance passes, record the checklist and evidence on the issue and mark the PR ready for the user to squash-merge. Do not merge for the user. Close the implementation issue only after its code PR is verifiably in the correct default branch, or immediately for a non-code deliverable whose acceptance itself completes the ticket.
+4. If independent review is required, start a read-only acceptance subagent after handback. Give it the exact contract version and primary-artifact locations, not the executor's conclusions as facts. Require `Criterion ID -> evidence -> Pass/Fail`; deeper inspection is allowed, stricter criteria are not.
+5. Produce the same evidence matrix in the orchestration session. A blocking finding must map to a frozen criterion ID. Findings with no mapping are non-blocking for this delivery, however useful; style preferences, optional refactors, and correctly deferred scope also cannot consume an escalation attempt.
+6. Reconcile any disagreement by checking the criterion and primary evidence, not by voting. The orchestration session makes and records the final decision.
+7. If every criterion passes, record the contract ID and version, matrix, and evidence on the issue and mark the PR ready for the owner to squash-merge. Do not merge for the owner. Close the implementation issue only after its code PR is verifiably in the correct default branch, or immediately for a non-code deliverable whose acceptance itself completes the ticket.
 
 Classify failed acceptance before choosing the next route, and cite the evidence for the classification:
 
@@ -129,7 +161,7 @@ Persist handback conclusions, blocking findings, failure classifications, routin
 
 ### Feed surprise findings back into the criteria
 
-If acceptance surfaces a finding that no pre-written criterion covered, the orchestration session must codify it before dispatching further tickets of the same kind — into the DoD baseline, an `AGENTS.md` hard constraint, `CONTEXT.md`, or the constrained file's own comments, through the usual branch + PR flow. A surprise happens once; the next time it is a written criterion. Record the codification (PR or commit reference) on the issue alongside the finding.
+If acceptance surfaces a finding that the frozen contract did not cover, record it as non-blocking for the current delivery and codify it before dispatching further tickets of the same kind. The orchestration session may update its allowed orchestration artifacts (`AGENTS.md`, `docs/agents/*.md`, `SKILL.md`, `CONTEXT.md`, or an ADR) through the normal branch-and-PR flow. If the durable constraint belongs in product source, build files, runtime configuration, or their local comments, create and dispatch an execution issue instead. A surprise happens once; the next applicable contract includes it. Record the codification PR or issue on the original delivery.
 
 ## Pull requests as a triage surface
 

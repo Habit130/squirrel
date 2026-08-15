@@ -26,6 +26,7 @@ Repo-relative paths:
 - `sources/InputSource.swift`: Text Input Source registration, enable/disable/select helpers, and current input source lookup.
 - `resources/Info.plist`: InputMethodKit registration metadata, input modes (`Hans`, `Hant`), IMK controller class names, connection name, Sparkle metadata, and input-source properties.
 - `resources/Squirrel.entitlements`: disables App Sandbox, enables network client access, and disables library validation for bundled dylibs/frameworks.
+- `data/squirrel.yaml`: checked-in source for the default frontend settings. `data/plum/` and `data/opencc/` are generated staging trees, not authoritative configuration sources.
 
 App-bundle paths (inside the built `Squirrel.app/Contents`, not the repo tree):
 
