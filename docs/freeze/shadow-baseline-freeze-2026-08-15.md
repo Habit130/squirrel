@@ -7,7 +7,7 @@
 ## 1. 冻结基线策略身份(baseline_policy_id)
 
 ```text
-frozen-baseline-v1:rule=mean-token-lm-v1:model=Qwen3-0.6B-Base:tokenizer=Qwen3-0.6B-Base:norm=exact-text:fail=fail-closed-passthrough:squirrel=9c47df777958:plugin=e4014051e7dd:alpha=0.0:beta_sys=1.0:beta_usr=1.0
+frozen-baseline-v1:rule=mean-token-lm-v1:model=Qwen3-0.6B-Base:tokenizer=Qwen3-0.6B-Base:norm=exact-text:fail=fail-closed-passthrough:squirrel=9c47df777958:plugin=ce58c72017db:alpha=0.0:beta_sys=1.0:beta_usr=1.0
 ```
 
 构成逐项(AC75-1,全部为冻结时部署事实):
@@ -21,7 +21,7 @@ frozen-baseline-v1:rule=mean-token-lm-v1:model=Qwen3-0.6B-Base:tokenizer=Qwen3-0
 | 候选规范化 | `exact-text` | 插件按候选文本精确比较(无额外 NFC 转换) |
 | 失败语义 | `fail-closed-passthrough` | #45:任一打分故障整窗原序透传 |
 | squirrel 代码 SHA | `9c47df777958` | 部署构建树 HEAD(origin/master) |
-| 插件代码 SHA | `e4014051e7dd` | from-source 构建的插件提交(daemon 后续修复 ce58c72 同源) |
+| 插件代码 SHA | `ce58c72017db` | 部署的插件提交(feat/baseline-policy-id HEAD);dylib 构建自 e401405,其 C++ 与 ce58c72 逐字节相同 |
 | α | `0.0` | #46 owner 决定默认 α=0(LM 项关闭) |
 | β_sys / β_usr | `1.0` / `1.0` | 默认系数 |
 
@@ -31,8 +31,9 @@ policy ID → 需要新冻结记录与新的开发目标 HLC 起点(AC75-6)。
 ## 2. 双仓库 SHA
 
 - squirrel:`9c47df777958b9424c7048bb5ba5f6cadc9c5da5`(origin/master HEAD,部署构建树)
-- librime-llm-rerank:构建用 `e4014051e7dd1236851e4fe8a06fdfafe3d5cc6a`(feat/baseline-policy-id),
-  daemon 运行用 `ce58c72`(同分支,status 读取修复,与构建提交 C++ 同源)
+- librime-llm-rerank:部署的插件提交 `ce58c72017db640b823adb87beb014da155e2bc9`(feat/baseline-policy-id HEAD)。
+  dylib 构建自 `e4014051e7dd1236851e4fe8a06fdfafe3d5cc6a`,其 C++ 与 ce58c72 逐字节相同
+  (e401405→ce58c72 差量仅 daemon/status_core.py 与 daemon/test_status.py)
 - librime 子模块:`33e78140250125871856cdc5b42ddc6a5fcd3cd4`(1.17.0)
 
 ## 3. 配置快照(部署真相源)
