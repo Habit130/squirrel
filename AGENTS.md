@@ -13,7 +13,7 @@ The machine-global `~/.config/opencode/AGENTS.md` applies. This file contains on
 Squirrel issue delivery overrides the global single-Agent division of work. A writing session must have one of these roles in its initiating prompt:
 
 - **Orchestration (main) session**: maintains an owner-confirmed scope and may write only orchestration artifacts: issues and tracker state, specifications, ADRs, roadmaps, Agent guidance, execution prompts, handback records, and acceptance records. It never implements or repairs a dispatched product-code issue.
-- **Execution session**: is started by the owner from a frozen execution prompt, handles one issue, and is the only active writer for that issue's branch and PR.
+- **Execution session**: is started by the owner from a frozen execution prompt, handles one issue, and is the only active writer for that issue's branch and PR. Frozen prompts live at `docs/orchestration/execution-prompts/`; the issue records the filename and SHA-256.
 
 An acceptance subagent is an optional read-only helper of the orchestration session, not a third delivery role. The orchestration session decides before dispatch whether to use one, records the reason, and remains the final decision-maker. Review depth may increase; the frozen acceptance standard may not.
 
