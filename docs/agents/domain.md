@@ -19,7 +19,8 @@ This repo is **single-context**:
 ├── CONTEXT.md
 └── docs/adr/
     ├── 0001-inference-process-boundary.md
-    └── 0002-windowed-stateless-scoring.md
+    ├── 0002-windowed-stateless-scoring.md
+    └── 0003-candidate-conditioned-semantic-representation.md
 ```
 
 ## Use the glossary's vocabulary — within its scope
