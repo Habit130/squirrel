@@ -20,3 +20,5 @@ package/*.xml
 .*.swp
 .DS_Store
 /installation.yaml
+docs/orchestration/execution-prompts/*
+!docs/orchestration/execution-prompts/README.md

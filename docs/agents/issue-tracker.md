@@ -96,11 +96,28 @@ Difficulty is separate from triage readiness: `ready-for-agent` permits unattend
 5. Select the lowest sufficient capability requirement. Lower cost wins only among levels that can exercise the remaining judgment; a known-hard ticket does not take a deliberately insufficient attempt merely to start cheaply.
 6. Decide whether the delivery needs an independent acceptance subagent. Record `required` or `not required` and the orchestration session's rationale; there are no automatic risk categories.
 7. Freeze the delivery contract and execution prompt. Give the execution session one issue only; require it to claim the issue before writing, implement and verify end to end, open the code PR in the correct repository, and leave both PR and issue open for acceptance.
-8. Return the prompt to the owner to start the execution session. The orchestration session does not start an implementation subagent itself.
+8. Write the frozen prompt to `docs/orchestration/execution-prompts/` using the filename convention below, record the repository-relative path and SHA-256 on the issue, and return that path to the owner. The orchestration session does not start an implementation subagent itself.
 
 Every execution prompt must be self-contained. It must designate `Session role: Execution`, name the executor attempt tier, issue title and URL, autonomy class and rationale, source repository and branch base, required context documents, accepted and deferred scope, established seams and remaining executor decisions, shared-state ownership, branch and PR rules, delivery-contract ID and version, supported operating envelope, blocking scenario matrix, accepted-risk register, criteria and expected evidence, independent-review decision and rationale, and the exact handback artifacts. For an easy ticket, instruct the session to follow the specified path and stop for genuine ambiguity. For a hard ticket, authorize local engineering decisions within the acceptance boundary and require those decisions and tradeoffs in the handback.
 
 A repair prompt must additionally name the current branch and PR, quote the failed contract criterion IDs with primary-artifact references, state the failure classification and remaining attempt, and require the new executor to verify the issue and current artifacts independently. Give an escalated or recovery executor the original contract and current artifacts, not the previous executor's reasoning as assumed fact. A completion summary is only a lead to inspect.
+
+### Execution prompt files
+
+Frozen execution and repair prompts are owner-machine handoff artifacts. Write them here, never to `/tmp` or other ephemeral paths:
+
+```text
+docs/orchestration/execution-prompts/AC-<issue>-v<n>-execution-prompt.md
+docs/orchestration/execution-prompts/AC-<issue>-v<n>-repair-prompt.md
+```
+
+Do not paste full prompt text into `AGENTS.md`, this file, ADRs, or issue/PR bodies. After freezing a prompt:
+
+1. Write the complete prompt to the matching filename.
+2. Record the repository-relative path and SHA-256 on the issue.
+3. Return that path to the owner. The owner starts the execution session from that file.
+
+Prompt bodies are gitignored. The directory README and this section are the committed source of the location. Do not overwrite a file after its hash has been published; a later contract version or repair prompt uses a new filename.
 
 ### Freeze one delivery contract
 
@@ -217,13 +234,13 @@ Classify failed acceptance before choosing the next route, and cite the evidence
 
 The bounded escalation sequence is: one initial attempt; at most one same-level revision for a local defect; one takeover by an escalated repairer; and one takeover by a recovery executor. Any stage that passes acceptance ends the chain. An escalated or recovery executor gets one complete takeover, not an unbounded review loop. If the recovery attempt fails, or the chain already uses the highest available sufficient capability, remove `ready-for-agent`, apply `ready-for-human`, and report the failed attempts, unresolved findings, and recommended owner decision. The owner may then close or reshape the work, accept non-stop-ship risks in a new contract version, or explicitly authorize a bounded human-led correction. That decision is not another automatic executor attempt.
 
-Persist handback conclusions, blocking findings, failure classifications, routing decisions, and final acceptance evidence on the issue or PR. Keep concrete model identities, prices, and full prompt text in the session handoff rather than the long-lived project rules.
+Persist handback conclusions, blocking findings, failure classifications, routing decisions, and final acceptance evidence on the issue or PR. Write full prompt text only to `docs/orchestration/execution-prompts/`. Keep concrete model identities and prices in that handoff file, not in the long-lived project rules.
 
 ### Feed surprise findings back by risk
 
 For every finding outside the frozen scenario matrix, record whether it is a stop-ship surprise or a risk finding and why. A stop-ship surprise blocks and must be codified before another applicable dispatch. A risk finding remains non-blocking unless the owner promotes it into a later contract; repeated occurrence or new evidence can justify that promotion, but discovery alone does not.
 
-The orchestration session may update its allowed orchestration artifacts (`AGENTS.md`, `docs/agents/*.md`, `SKILL.md`, `CONTEXT.md`, or an ADR) through the normal branch-and-PR flow. If a promoted constraint belongs in product source, build files, runtime configuration, or their local comments, create and dispatch an execution issue instead. Record any codification PR, follow-up issue, accepted-risk ID, or revisit milestone on the original delivery.
+The orchestration session may update its allowed orchestration artifacts (`AGENTS.md`, `docs/agents/*.md`, `docs/orchestration/`, `SKILL.md`, `CONTEXT.md`, or an ADR) through the normal branch-and-PR flow. If a promoted constraint belongs in product source, build files, runtime configuration, or their local comments, create and dispatch an execution issue instead. Record any codification PR, follow-up issue, accepted-risk ID, or revisit milestone on the original delivery.
 
 ## Pull requests as a triage surface
 
