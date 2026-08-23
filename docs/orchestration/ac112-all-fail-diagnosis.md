@@ -1,6 +1,6 @@
 # AC-112 七路全灭的表示失败诊断
 
-合同：`AC-115-v2`。本诊断只读取已接受的 AC-112-v2 工件、`f185da3` 的已提交摘要及评分代码；未读取或复制原始上文、候选文本、向量或本机路径。
+合同：`AC-115-v2`。本诊断读取 ADR-0003、`CONTEXT.md`、#112 验收记录、#43 修订 `5364941817`，以及已接受的 AC-112-v2 工件、`f185da3` 的已提交摘要和评分代码；数值结论只聚合合同允许的工件字段。未读取或复制原始上文、候选文本、向量或本机路径。
 
 ## 冻结身份
 
@@ -18,7 +18,7 @@
 确认是**有效的表示质量失败**，不支持评分或配对 bug 的解释。
 
 - 七路各有 100/100 个 v2 正例；每一路的 `positive.above_tau`、`positive.in_exact_top_k`、`positive.matched_candidate` 和 `positive.qualified` 都是 0。
-- 每一路的 100 个正例失败都含 `below_tau`。`_route_quality_result` 先计算目标余弦并应用严格阈值，再通过 exact oracle 求 top-K；因此 `outside_exact_top_k` 与 `candidate_mismatch` 在这里是阈值淘汰的下游结果，不是独立的配对证据。
+- 每一路的 100 个正例失败都含 `below_tau`。`_route_quality_result` 计算目标余弦，将同一 `tau` 交给 exact oracle，并以严格的 `cosine > tau` 记录 `above_tau`；报告中两者一致为 0。`outside_exact_top_k` 与 `candidate_mismatch` 因而没有提供独立于阈值失败的配对证据。
 - 每一路被报告为失败的 hard negative 都在 `tau` 以上，且其 `target_above_tau` 数与 `target_in_exact_top_k` 数相同（6--15）。这与代码的阈值方向和 exact-oracle 行为一致。
 
 因此，AC-112 的 `seven_route_all_fail` 是“高 Q95 下全部正例 `below_tau`”的真实结果；这不等于已经识别出唯一的表示机理。
