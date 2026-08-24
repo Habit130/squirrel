@@ -50,6 +50,8 @@ librime, by downloading the latest librime binary from GitHub releases.
 bash ./action-install.sh
 ```
 
+The script verifies a repository-pinned SHA-256 for each downloaded archive before extraction. See `docs/agents/build.md` for which version pins and hashes must change together.
+
 When this is done, you may move on to [Build Squirrel](#build-squirrel).
 
 ### Install Boost C++ libraries
