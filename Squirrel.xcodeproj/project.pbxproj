@@ -87,8 +87,11 @@
 		7B5488C91D2DACDF0056A1BE /* symbols.yaml in Copy Shared Support Files */ = {isa = PBXBuildFile; fileRef = 7B54883B1D2DAAD10056A1BE /* symbols.yaml */; };
 		B3216E5C2BF438F800E292D2 /* rime.pdf in Resources */ = {isa = PBXBuildFile; fileRef = B3216E5B2BF438F800E292D2 /* rime.pdf */; };
 		B35D2FE82BF00839009D156B /* BridgingFunctions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B35D2FE72BF00839009D156B /* BridgingFunctions.swift */; };
+		C4A127E197F00000000001 /* CandidateLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4A127E197F00000000002 /* CandidateLine.swift */; };
 		B3A001022F260100009D156B /* ReservedProperty.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A001012F260100009D156B /* ReservedProperty.swift */; };
 		C12300022F4A1230000AC123 /* CLIBuildStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C12300012F4A1230000AC123 /* CLIBuildStatus.swift */; };
+		C11800022F4A1180000AC118 /* CompositionFinalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11800012F4A1180000AC118 /* CompositionFinalization.swift */; };
+		C12100022F4A1210000AC121 /* PagingHitPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = C12100012F4A1210000AC121 /* PagingHitPaths.swift */; };
 		B38E9B912BE9AE1E0036ABEF /* SquirrelApplicationDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38E9B902BE9AE1E0036ABEF /* SquirrelApplicationDelegate.swift */; };
 		B38E9B952BEAFEFD0036ABEF /* SquirrelInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38E9B942BEAFEFD0036ABEF /* SquirrelInputController.swift */; };
 		B39771232BECEA150093A49B /* MacOSKeyCodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = B39771222BECEA150093A49B /* MacOSKeyCodes.swift */; };
@@ -319,8 +322,11 @@
 		B3216E5B2BF438F800E292D2 /* rime.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = rime.pdf; path = resources/rime.pdf; sourceTree = "<group>"; };
 		B32B80772BE7FAA200FCF3BC /* Squirrel.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; name = Squirrel.entitlements; path = resources/Squirrel.entitlements; sourceTree = "<group>"; };
 		B35D2FE72BF00839009D156B /* BridgingFunctions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BridgingFunctions.swift; path = sources/BridgingFunctions.swift; sourceTree = "<group>"; };
+		C4A127E197F00000000002 /* CandidateLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CandidateLine.swift; path = sources/CandidateLine.swift; sourceTree = "<group>"; };
 		B3A001012F260100009D156B /* ReservedProperty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReservedProperty.swift; path = sources/ReservedProperty.swift; sourceTree = "<group>"; };
 		C12300012F4A1230000AC123 /* CLIBuildStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CLIBuildStatus.swift; path = sources/CLIBuildStatus.swift; sourceTree = "<group>"; };
+		C11800012F4A1180000AC118 /* CompositionFinalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CompositionFinalization.swift; path = sources/CompositionFinalization.swift; sourceTree = "<group>"; };
+		C12100012F4A1210000AC121 /* PagingHitPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PagingHitPaths.swift; path = sources/PagingHitPaths.swift; sourceTree = "<group>"; };
 		B38E9B8F2BE9AE1E0036ABEF /* Squirrel-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "Squirrel-Bridging-Header.h"; path = "sources/Squirrel-Bridging-Header.h"; sourceTree = "<group>"; };
 		B38E9B902BE9AE1E0036ABEF /* SquirrelApplicationDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SquirrelApplicationDelegate.swift; path = sources/SquirrelApplicationDelegate.swift; sourceTree = "<group>"; };
 		B38E9B942BEAFEFD0036ABEF /* SquirrelInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SquirrelInputController.swift; path = sources/SquirrelInputController.swift; sourceTree = "<group>"; };
@@ -367,8 +373,11 @@
 				B39771282BEDAF4A0093A49B /* SquirrelView.swift */,
 				B39771242BED899F0093A49B /* SquirrelConfig.swift */,
 				B35D2FE72BF00839009D156B /* BridgingFunctions.swift */,
+				C4A127E197F00000000002 /* CandidateLine.swift */,
 				B3A001012F260100009D156B /* ReservedProperty.swift */,
 				C12300012F4A1230000AC123 /* CLIBuildStatus.swift */,
+				C11800012F4A1180000AC118 /* CompositionFinalization.swift */,
+				C12100012F4A1210000AC121 /* PagingHitPaths.swift */,
 				B38E9B8F2BE9AE1E0036ABEF /* Squirrel-Bridging-Header.h */,
 			);
 			name = Sources;
@@ -642,8 +651,11 @@
 				B38E9B912BE9AE1E0036ABEF /* SquirrelApplicationDelegate.swift in Sources */,
 				B39771272BED9B250093A49B /* SquirrelTheme.swift in Sources */,
 				B35D2FE82BF00839009D156B /* BridgingFunctions.swift in Sources */,
+				C4A127E197F00000000001 /* CandidateLine.swift in Sources */,
 				B3A001022F260100009D156B /* ReservedProperty.swift in Sources */,
 				C12300022F4A1230000AC123 /* CLIBuildStatus.swift in Sources */,
+				C11800022F4A1180000AC118 /* CompositionFinalization.swift in Sources */,
+				C12100022F4A1210000AC121 /* PagingHitPaths.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

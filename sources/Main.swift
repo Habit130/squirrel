@@ -151,7 +151,7 @@ struct SquirrelApp {
 
       app.run()
       print("Squirrel is quitting...")
-      rimeAPI.finalize()
+      NSApp.squirrelAppDelegate.applyGlobalLifecycle(.processExit)
     }
     return
   }
