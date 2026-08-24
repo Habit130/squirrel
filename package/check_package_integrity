@@ -1,0 +1,75 @@
+#!/bin/bash
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PACKAGE_DIR="${ROOT}/package"
+cd "${ROOT}"
+
+# shellcheck source=common.sh
+source "${PACKAGE_DIR}/common.sh"
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+pass() {
+  echo "PASS: $*"
+}
+
+app_version="$(get_app_version)"
+[ -n "${app_version}" ] || fail "could not read app version"
+target_pkg="${PACKAGE_DIR}/Squirrel-${app_version}.pkg"
+dummy_pkg="${PACKAGE_DIR}/Squirrel.pkg"
+failing_signer="$(mktemp "${TMPDIR:-/tmp}/squirrel-sign-fail.XXXXXX")"
+ok_signer="$(mktemp "${TMPDIR:-/tmp}/squirrel-sign-ok.XXXXXX")"
+
+cleanup() {
+  rm -f "${dummy_pkg}" \
+    "${target_pkg}" \
+    "${PACKAGE_DIR}/appcast.xml" \
+    "${PACKAGE_DIR}/testing-appcast.xml" \
+    "${PACKAGE_DIR}/debug-appcast.xml" \
+    "${failing_signer}" \
+    "${ok_signer}"
+}
+trap cleanup EXIT
+
+cat > "${failing_signer}" <<'EOF'
+#!/bin/bash
+echo "mock sign_update failing" >&2
+exit 1
+EOF
+cat > "${ok_signer}" <<'EOF'
+#!/bin/bash
+echo 'sparkle:edSignature="dGVzdC1zaWduYXR1cmU=" length="123"'
+exit 0
+EOF
+chmod +x "${failing_signer}" "${ok_signer}"
+
+echo stale-squirrel-pkg > "${dummy_pkg}"
+dry="$(make -n package/Squirrel.pkg)"
+echo "${dry}" | grep -q 'package/make_package' || fail "SCN-125-1: stale package/Squirrel.pkg was reused: ${dry:-<empty>}"
+pass "SCN-125-1 stale package is rebuilt"
+
+SIGN_UPDATE="${failing_signer}" bash "${PACKAGE_DIR}/make_archive" || fail "SCN-125-2: make_archive failed while appcast is disabled"
+[ -f "${target_pkg}" ] || fail "SCN-125-2: missing ${target_pkg}"
+[ ! -f "${PACKAGE_DIR}/appcast.xml" ] || fail "SCN-125-2: appcast.xml written after #126 disabled the feed"
+[ ! -f "${PACKAGE_DIR}/testing-appcast.xml" ] || fail "SCN-125-2: testing-appcast.xml written after #126 disabled the feed"
+[ ! -f "${PACKAGE_DIR}/debug-appcast.xml" ] || fail "SCN-125-2: debug-appcast.xml written after #126 disabled the feed"
+pass "SCN-125-2 archive does not emit an upstream appcast"
+rm -f "${target_pkg}"
+
+SIGN_UPDATE="${PACKAGE_DIR}/sign_update_missing" bash "${PACKAGE_DIR}/make_archive" || fail "SCN-125-2: make_archive failed without sign_update"
+[ -f "${target_pkg}" ] || fail "SCN-125-2: missing ${target_pkg} without signer"
+[ ! -f "${PACKAGE_DIR}/appcast.xml" ] || fail "SCN-125-2: appcast.xml written without signer"
+pass "SCN-125-2 missing signer does not create an appcast"
+rm -f "${target_pkg}"
+
+SIGN_UPDATE="${ok_signer}" bash "${PACKAGE_DIR}/make_archive" || fail "SCN-125-3: unsigned complete archive failed"
+[ -f "${target_pkg}" ] || fail "SCN-125-3: missing ${target_pkg}"
+[ ! -f "${PACKAGE_DIR}/appcast.xml" ] || fail "SCN-125-3: appcast.xml written; feed is disabled"
+pass "SCN-125-3 versioned archive succeeds without an appcast"
+
+echo "package integrity check passed"

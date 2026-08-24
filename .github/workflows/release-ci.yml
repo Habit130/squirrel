@@ -28,6 +28,9 @@ jobs:
       - name: Lint
         run: swiftlint
 
+      - name: Check package integrity
+        run: bash package/check_package_integrity
+
       - name: Check bundled recipe contract
         run: bash package/check_bundled_recipes
 

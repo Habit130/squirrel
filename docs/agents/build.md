@@ -96,8 +96,9 @@ Common targets:
 
 - `make` / `make release`: release app build
 - `make debug`: debug app build
-- `make package`: installer package; signing/notarization uses `DEV_ID`
-- `make archive`: package plus Sparkle `sign_update` and the versioned installer archive. Appcast generation stays off until this fork owns a signed feed.
+- `make package`: installer package; always rebuilt from the current release app. Signing/notarization uses `DEV_ID`
+- `make archive`: package plus the versioned installer archive. Appcast generation stays off until this fork owns a signed feed.
+- `make check-package-integrity`: packaging fail-closed checks (stale package rebuild; no leftover complete release)
 - `make check-update-channel`: fail if Info.plist, the update-channel type, or `package/make_archive` names the upstream rime/squirrel feed, key, or download URL
 - `make install` / `make install-debug` / `make install-release`: install into `/Library/Input Methods`
 - `make clean` / `make clean-deps` / `make clean-package`: remove the corresponding generated artifacts
@@ -113,4 +114,4 @@ Use `SKILL.md` for the behavior-specific manual validation checklist. For live t
 
 For librime source changes, use `make -C librime test` or `make -C librime test-debug` as required by the ticket. A separately delivered plugin follows its own repository's test rules in addition to the Squirrel integration path specified by the execution prompt.
 
-CI uses macOS 26 with Xcode 26.5. Commit and pull-request workflows run SwiftLint, `package/check_bundled_recipes`, `package/check_update_channel`, `./action-build.sh package` (the documented `./action-install.sh && make` plus universal/package flags), and Periphery. After the package build they rerun the recipe check with `--require-installed`. The release workflow substitutes `./action-build.sh archive` so it also builds Sparkle's `sign_update` tool and the versioned installer archive.
+CI uses macOS 26 with Xcode 26.5. Commit and pull-request workflows run SwiftLint, `package/check_package_integrity`, `package/check_bundled_recipes`, `package/check_update_channel`, `./action-build.sh package` (the documented `./action-install.sh && make` plus universal/package flags), and Periphery. After the package build they rerun the recipe check with `--require-installed`. The release workflow substitutes `./action-build.sh archive` so it also builds the versioned installer archive.

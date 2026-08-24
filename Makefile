@@ -138,7 +138,7 @@ clean-sparkle:
 	rm -rf Frameworks/* > /dev/null 2>&1 || true
 	rm -rf Sparkle/build > /dev/null 2>&1 || true
 
-.PHONY: package archive check-update-channel
+.PHONY: package archive check-package-integrity check-update-channel $(PACKAGE)
 
 check-update-channel:
 	bash package/check_update_channel
@@ -160,6 +160,9 @@ package: release $(PACKAGE)
 
 archive: package package/sign_update
 	bash package/make_archive
+
+check-package-integrity:
+	bash package/check_package_integrity
 
 DSTROOT = /Library/Input Methods
 SQUIRREL_APP_ROOT = $(DSTROOT)/Squirrel.app
