@@ -14,8 +14,11 @@ The Xcode project is organized around one app target, `Squirrel.app`, plus bundl
 Repo-relative paths:
 
 - `sources/Main.swift`: process entry point, command-line maintenance commands, IMK server creation, app setup, and global librime startup.
+- `sources/CLIBuildStatus.swift`: maps CLI `--build` `rimeAPI.deploy()` success/failure to process exit status and a stable diagnostic. In-app `SquirrelApplicationDelegate.deploy()` does not use this path.
 - `sources/SquirrelApplicationDelegate.swift`: app-wide state. Owns the candidate panel, global `SquirrelConfig`, status item, Sparkle update integration, distributed notifications, and librime setup/finalization.
+- `sources/CompositionFinalization.swift`: Foundation-only planner for finalizing the active composition before global session cleanup. Used by deploy, sync, quit, power-off, and process-exit.
 - `sources/SquirrelInputController.swift`: the main InputMethodKit controller. Owns one active librime session per controller instance, receives key events, translates macOS events to Rime key events, commits text, updates marked text, and drives the candidate panel.
+- `sources/AppRetarget.swift`: Foundation-only planner for isolating `app_options` when IMK retargets a controller. Diffs applied keys, restores schema defaults for A-only options, and recomputes inline/soft_cursor without resetting the session.
 - `sources/MacOSKeyCodes.swift`: maps AppKit/Carbon key codes and modifier flags to librime/X11 key symbols and masks.
 - `sources/ModifierPhysicalKeys.swift`: resolves each changed `.flagsChanged` modifier to its own physical or inferred Carbon key and orders releases before presses.
 - `sources/SquirrelConfig.swift`: thin typed wrapper over `RimeConfig`, with base config/schema fallback and cached option reads.
@@ -42,7 +45,7 @@ App-bundle paths (inside the built `Squirrel.app/Contents`, not the repo tree):
    - `--quit`, `--reload`, `--sync`
    - `--install` / `--register-input-source`
    - `--enable-input-source`, `--disable-input-source`, `--select-input-source`
-   - `--build`
+   - `--build` (exits 0 on successful `rimeAPI.deploy()`; on failure prints `Squirrel --build: deployment failed` to stderr and exits 1)
    - `--ascii`, `--nascii`, `--getascii`
 2. If no maintenance command is handled, it creates an `IMKServer` using `InputMethodConnectionName` from `Info.plist`.
 3. It creates `NSApplication.shared`, assigns `SquirrelApplicationDelegate`, sets accessory activation policy, and changes the current directory to `Bundle.main.sharedSupportPath`. This is important because OpenCC/librime configuration may use relative dictionary paths.
@@ -52,7 +55,7 @@ App-bundle paths (inside the built `Squirrel.app/Contents`, not the repo tree):
    - `startRime(fullCheck: false)`
    - `loadSettings()`
    - `app.run()`
-6. On app-run return, it calls `rimeAPI.finalize()`.
+6. On app-run return, it finalizes any active composition, then finalizes librime if it is still initialized.
 
 ## Global Librime Initialization
 
@@ -67,8 +70,8 @@ App-bundle paths (inside the built `Squirrel.app/Contents`, not the repo tree):
 - `startRime(fullCheck:)` calls `rimeAPI.initialize(nil)`, then `start_maintenance(fullCheck)`. On successful maintenance it deploys `squirrel.yaml` with the `config_version` marker.
 - `loadSettings()` opens base `squirrel` config, refreshes notification/status-icon settings, and loads light/dark panel themes.
 - `loadSettings(for schemaID:)` opens the active schema config and, when it has a `style` section, overlays schema-specific panel style. Otherwise it falls back to base config.
-- `shutdownRime()` closes config and calls `rimeAPI.finalize()`.
-- `applicationShouldTerminate(_:)` calls `cleanup_all_sessions()` before termination.
+- `shutdownRime()` closes config and, if librime is still initialized, calls `rimeAPI.finalize()`.
+- `deploy()`, `syncUserData()`, `applicationShouldTerminate(_:)`, `workspaceWillPowerOff(_:)`, and process-exit cleanup all finalize the active composition before invalidating sessions. Idle and no-session paths are no-ops and do not create a session. After `finalize()`, those paths do not call librime except a later `initialize()` on deploy.
 
 Do not initialize/finalize librime from individual input controllers. Controllers own sessions; the application delegate owns the backend lifetime.
 
@@ -77,10 +80,10 @@ Do not initialize/finalize librime from individual input controllers. Controller
 `SquirrelInputController` subclasses `IMKInputController` and is the core input-method object.
 
 - `init(server:delegate:client:)` stores the initial `IMKTextInput` client, calls `createSession()`, and registers local notification observers for ASCII-mode set/report requests.
-- `createSession()` chooses a client bundle identifier, creates a librime session with `rimeAPI.create_session()`, clears `schemaId`, and applies app-specific options.
+- `createSession()` creates a librime session with `rimeAPI.create_session()`, clears `schemaId` and previously applied app-option state, then applies the current client's app options through `AppRetarget`.
 - `destroySession()` calls `rimeAPI.destroy_session(session)` and clears chord typing state.
 - `deinit` destroys the session.
-- `activateServer(_:)` refreshes the current client, optionally overrides the keyboard layout from `keyboard_layout`, clears local preedit cache, and updates the menu-bar status label from `ascii_mode` if a session already exists.
+- `activateServer(_:)` refreshes the current client, isolates app options if IMK retargeted the controller, optionally overrides the keyboard layout from `keyboard_layout`, clears local preedit cache, and updates the menu-bar status label from `ascii_mode` if a session already exists. Same-client activation does not reset the session or rewrite options.
 - `deactivateServer(_:)` hides palettes, commits the current composition to the client, and releases the client reference.
 - `commitComposition(_:)` commits raw pending librime input via `client.insertText`, then clears the librime composition.
 
@@ -92,7 +95,7 @@ The critical loop is `handle(_:client:) -> Bool` in `SquirrelInputController`.
 
 1. Ensure there is a valid librime session. If `session == 0` or `find_session(session)` fails, call `createSession()`.
 2. Update the weak `IMKTextInput` client from `sender` when possible.
-3. Detect client app bundle ID changes and apply `app_options/<bundle-id>` from `squirrel.yaml`.
+3. Detect client app identity changes (including nil/empty bundle IDs) and isolate `app_options/<bundle-id>`: apply B's keys, restore A-only keys to snapshotted schema defaults, and recompute inline/soft_cursor immediately. The session is kept.
 4. For `.flagsChanged`:
    - Compute changed modifier flags by comparing with `lastModifiers`.
    - Convert modifiers with `SquirrelKeycode.osxModifiersToRime`.
@@ -129,10 +132,11 @@ Main sequence:
 
 1. Clear reserved comment UI hints unless the caller explicitly preserves them.
 2. `rimeConsumeCommittedText()` calls `get_commit`, inserts committed text into the client, frees the commit struct, resets local preedit, and hides the panel.
-3. `get_status` detects schema changes:
-   - reloads schema-specific settings through the app delegate;
-   - calculates `inlinePreedit` and `inlineCandidate` using panel config plus librime options (`no_inline`, `inline`);
-   - sets librime `soft_cursor` to the inverse of inline preedit.
+  3. `get_status` detects schema changes:
+    - reloads schema-specific settings through the app delegate;
+    - calculates `inlinePreedit` and `inlineCandidate` using panel config plus librime options (`no_inline`, `inline`);
+    - sets librime `soft_cursor` to the inverse of inline preedit.
+    App-option isolation runs the same inline/soft_cursor calculation immediately after a client retarget, even when the schema ID is unchanged.
 4. `get_context` reads composition and menu state:
    - preedit string;
    - selected segment byte offsets converted to Swift indices;
@@ -196,6 +200,7 @@ Mouse and scroll events on the panel are forwarded back to the input controller:
 - It uses an `NSTextView` with TextKit 2 layout to measure actual rendered text segments.
 - `contentRect` and `contentRect(range:)` enumerate text layout segments to compute bounds.
 - `draw(_:)` builds Core Graphics paths for panel background, preedit background, candidate backgrounds, highlighted candidate, highlighted preedit range, border, shadow, and paging controls.
+- Each `draw(_:)` replaces both paging hit paths from the current paging layer, including `nil` when a control is absent, so `click(at:)` cannot page through a stale region.
 - `shape` is also used as the panel background mask and hit-test region.
 - `click(at:)` maps mouse points back into TextKit offsets and candidate/preedit ranges.
 
@@ -209,6 +214,7 @@ When changing panel layout, preserve the order: set attributed text, set layout 
 - `open(schemaID:baseConfig:)` opens schema config and falls back to base config for missing values.
 - `getBool`, `getDouble`, `getString`, and `getColor` cache successful reads.
 - `getAppOptions(_:)` reads boolean options under `app_options/<bundle-id>`.
+- `allAppOptionKeys()` is the union of those keys across every configured bundle. Session creation snapshots their schema defaults before applying the current app.
 
 `SquirrelTheme.load(config:dark:)` reads global `style/*`, then optional preset color scheme settings. Per-color-scheme values can override style values for layout, color, fonts, alpha, spacing, and candidate formatting.
 
@@ -218,7 +224,7 @@ Important theme flags:
 - `text_orientation`: horizontal vs vertical.
 - `inline_preedit`, `inline_candidate`: marked text vs panel display strategy.
 - `translucency`, `mutual_exclusive`, `memorize_size`, `show_paging`.
-- `candidate_format`: template using `[label]`, `[candidate]`, `[comment]`; legacy `%c` and `%@` are normalized.
+- `candidate_format`: template using `[label]`, `[candidate]`, `[comment]`; legacy `%c` and `%@` are normalized. An empty value falls back to `[candidate]` so the candidate text remains visible. No-break attributes are applied only to ranges contained in the constructed line.
 
 ## Notifications and External Commands
 
@@ -313,10 +319,11 @@ Keep these invariants in mind for any change:
 - Every key event path that changes librime state should call `rimeUpdate()` exactly when frontend state needs to be consumed.
 - Do not consume Command shortcuts in normal text input; let client applications handle them.
 - Deactivation must hide the panel and commit or clear active composition so no marked text or panel is stranded.
+- Global session cleanup (`deploy`, `sync_user_data`, quit, power-off, process exit) must finalize the active composition first: commit exactly once when a valid client exists; if the client is unavailable, clear local marked text and the panel without calling librime after finalize.
 - Always guard against nil or stale `IMKTextInput` clients.
 - Convert librime byte offsets into Swift string indices before building `NSRange` values.
 - Keep `get_context`, `get_status`, and `get_commit` free calls paired with successful reads.
-- Preserve app-specific options on session creation and when the focused client bundle changes.
+- Preserve app-specific options on session creation and when the focused client bundle changes. Retargeting from app A to app B must leave B with only B's `app_options` plus schema defaults; A-only keys are restored rather than leaked. Same-client activation must not reset the session.
 - Candidate panel geometry depends on TextKit layout results. Avoid measuring before layout is forced.
 - Vertical text affects key behavior, layout orientation, content rotation, panel positioning, and scroll paging direction.
 - `inlinePreedit` and `inlineCandidate` are determined jointly by theme config and librime options.
@@ -346,9 +353,10 @@ For config changes:
 
 For lifecycle or command changes:
 
-1. Start in `Main.swift` for command-line behavior.
-2. Start in `SquirrelApplicationDelegate` for app-global observers, Rime setup, status item behavior, and termination.
-3. Keep distributed notification names stable unless all callers are updated.
+1. Start in `Main.swift` for command-line behavior. Route `--build` deploy success/failure through `CLIBuildStatus` so a failed deploy exits nonzero with the stable diagnostic.
+2. Start in `SquirrelApplicationDelegate` for app-global observers, Rime setup, status item behavior, and termination. Do not change in-app `deploy()` when adjusting CLI `--build` status.
+3. Route global session invalidation through `CompositionFinalization` so composition is finalized before deploy, sync, quit, power-off, or process-exit cleanup.
+4. Keep distributed notification names stable unless all callers are updated.
 
 For librime plugin/frontend coordination:
 
@@ -359,7 +367,7 @@ For librime plugin/frontend coordination:
 
 ## Validation Checklist
 
-When possible, validate with Xcode build diagnostics or a full Xcode build. For behavior changes, manually exercise:
+When possible, validate with Xcode build diagnostics or a full Xcode build. App-option retarget changes also run `probes/app_retarget_probe.swift` via `swiftc`. CLI `--build` exit-status changes also run `probes/cli_build_status_probe.swift` via `swiftc`. Composition-finalization lifecycle changes also run `probes/composition_finalization_probe.swift` via `swiftc`. For behavior changes, manually exercise:
 
 - input activation/deactivation in multiple apps;
 - typing, committing, cancelling, and switching input sources mid-composition;
