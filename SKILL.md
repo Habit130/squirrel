@@ -15,7 +15,7 @@ Repo-relative paths:
 
 - `sources/Main.swift`: process entry point, command-line maintenance commands, IMK server creation, app setup, and global librime startup.
 - `sources/CLIBuildStatus.swift`: maps CLI `--build` `rimeAPI.deploy()` success/failure to process exit status and a stable diagnostic. In-app `SquirrelApplicationDelegate.deploy()` does not use this path.
-- `sources/SquirrelApplicationDelegate.swift`: app-wide state. Owns the candidate panel, global `SquirrelConfig`, status item, Sparkle update integration, distributed notifications, and librime setup/finalization.
+- `sources/SquirrelApplicationDelegate.swift`: app-wide state. Owns the candidate panel, global `SquirrelConfig`, status item, the disabled fork update channel, distributed notifications, and librime setup/finalization.
 - `sources/CompositionFinalization.swift`: Foundation-only planner for finalizing the active composition before global session cleanup. Used by deploy, sync, quit, power-off, and process-exit.
 - `sources/SquirrelInputController.swift`: the main InputMethodKit controller. Owns one active librime session per controller instance, receives key events, translates macOS events to Rime key events, commits text, updates marked text, and drives the candidate panel.
 - `sources/AppRetarget.swift`: Foundation-only planner for isolating `app_options` when IMK retargets a controller. Diffs applied keys, restores schema defaults for A-only options, and recomputes inline/soft_cursor without resetting the session.
@@ -28,7 +28,7 @@ Repo-relative paths:
 - `sources/ReservedProperty.swift`: reserved librime plugin property protocol for frontend UI hints such as comment highlighting and UI refresh.
 - `sources/BridgingFunctions.swift`: Swift helpers for C bridge structs, persistent C strings, optional assignment, and geometry utilities.
 - `sources/InputSource.swift`: Text Input Source registration, enable/disable/select helpers, and current input source lookup.
-- `resources/Info.plist`: InputMethodKit registration metadata, input modes (`Hans`, `Hant`), IMK controller class names, connection name, Sparkle metadata, and input-source properties.
+- `resources/Info.plist`: InputMethodKit registration metadata, input modes (`Hans`, `Hant`), IMK controller class names, connection name, disabled Sparkle keys, and input-source properties.
 - `resources/Squirrel.entitlements`: disables App Sandbox, enables network client access, and disables library validation for bundled dylibs/frameworks.
 - `data/squirrel.yaml`: checked-in source for the default frontend settings. `data/plum/` and `data/opencc/` are generated staging trees, not authoritative configuration sources.
 
