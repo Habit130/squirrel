@@ -217,7 +217,7 @@ Important theme flags:
 - `text_orientation`: horizontal vs vertical.
 - `inline_preedit`, `inline_candidate`: marked text vs panel display strategy.
 - `translucency`, `mutual_exclusive`, `memorize_size`, `show_paging`.
-- `candidate_format`: template using `[label]`, `[candidate]`, `[comment]`; legacy `%c` and `%@` are normalized.
+- `candidate_format`: template using `[label]`, `[candidate]`, `[comment]`; legacy `%c` and `%@` are normalized. An empty value falls back to `[candidate]` so the candidate text remains visible. No-break attributes are applied only to ranges contained in the constructed line.
 
 ## Notifications and External Commands
 
