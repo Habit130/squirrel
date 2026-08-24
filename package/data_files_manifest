@@ -6,9 +6,9 @@
 # so local build output can never pollute the project file.
 #
 # Update this file whenever the bundled recipes change
-# (SQUIRREL_BUNDLED_RECIPES in action-build.sh, or plum defaults), keeping
-# it in sync with what a clean install puts into data/plum/. One filename
-# per line; blank lines and lines starting with # are ignored.
+# (package/bundled_recipes, or plum defaults), keeping it in sync with
+# what a clean install puts into data/plum/. One filename per line;
+# blank lines and lines starting with # are ignored.
 bopomofo_express.schema.yaml
 bopomofo_tw.schema.yaml
 bopomofo.schema.yaml

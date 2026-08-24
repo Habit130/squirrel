@@ -73,8 +73,7 @@ struct SquirrelApp {
           builderTraits.setCString("rime.squirrel-builder", to: \.app_name)
           rimeAPI.setup(&builderTraits)
           rimeAPI.deployer_initialize(nil)
-          _ = rimeAPI.deploy()
-          return true
+          CLIBuildStatus.terminateProcess(with: CLIBuildStatus.outcome(deploySucceeded: rimeAPI.deploy()))
         case "--sync":
           DistributedNotificationCenter.default().postNotificationName(.init("SquirrelSyncNotification"), object: nil)
           return true
@@ -152,7 +151,7 @@ struct SquirrelApp {
 
       app.run()
       print("Squirrel is quitting...")
-      rimeAPI.finalize()
+      NSApp.squirrelAppDelegate.applyGlobalLifecycle(.processExit)
     }
     return
   }
