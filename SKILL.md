@@ -196,6 +196,7 @@ Mouse and scroll events on the panel are forwarded back to the input controller:
 - It uses an `NSTextView` with TextKit 2 layout to measure actual rendered text segments.
 - `contentRect` and `contentRect(range:)` enumerate text layout segments to compute bounds.
 - `draw(_:)` builds Core Graphics paths for panel background, preedit background, candidate backgrounds, highlighted candidate, highlighted preedit range, border, shadow, and paging controls.
+- Each `draw(_:)` replaces both paging hit paths from the current paging layer, including `nil` when a control is absent, so `click(at:)` cannot page through a stale region.
 - `shape` is also used as the panel background mask and hit-test region.
 - `click(at:)` maps mouse points back into TextKit offsets and candidate/preedit ranges.
 
@@ -218,7 +219,7 @@ Important theme flags:
 - `text_orientation`: horizontal vs vertical.
 - `inline_preedit`, `inline_candidate`: marked text vs panel display strategy.
 - `translucency`, `mutual_exclusive`, `memorize_size`, `show_paging`.
-- `candidate_format`: template using `[label]`, `[candidate]`, `[comment]`; legacy `%c` and `%@` are normalized.
+- `candidate_format`: template using `[label]`, `[candidate]`, `[comment]`; legacy `%c` and `%@` are normalized. An empty value falls back to `[candidate]` so the candidate text remains visible. No-break attributes are applied only to ranges contained in the constructed line.
 
 ## Notifications and External Commands
 
