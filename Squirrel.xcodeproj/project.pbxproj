@@ -89,6 +89,7 @@
 		B35D2FE82BF00839009D156B /* BridgingFunctions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B35D2FE72BF00839009D156B /* BridgingFunctions.swift */; };
 		C4A127E197F00000000001 /* CandidateLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4A127E197F00000000002 /* CandidateLine.swift */; };
 		B3A001022F260100009D156B /* ReservedProperty.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A001012F260100009D156B /* ReservedProperty.swift */; };
+		C11900022F4A1190000AC119 /* AppRetarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11900012F4A1190000AC119 /* AppRetarget.swift */; };
 		C12300022F4A1230000AC123 /* CLIBuildStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C12300012F4A1230000AC123 /* CLIBuildStatus.swift */; };
 		C11800022F4A1180000AC118 /* CompositionFinalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11800012F4A1180000AC118 /* CompositionFinalization.swift */; };
 		C12100022F4A1210000AC121 /* PagingHitPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = C12100012F4A1210000AC121 /* PagingHitPaths.swift */; };
@@ -324,6 +325,7 @@
 		B35D2FE72BF00839009D156B /* BridgingFunctions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = BridgingFunctions.swift; path = sources/BridgingFunctions.swift; sourceTree = "<group>"; };
 		C4A127E197F00000000002 /* CandidateLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CandidateLine.swift; path = sources/CandidateLine.swift; sourceTree = "<group>"; };
 		B3A001012F260100009D156B /* ReservedProperty.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReservedProperty.swift; path = sources/ReservedProperty.swift; sourceTree = "<group>"; };
+		C11900012F4A1190000AC119 /* AppRetarget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppRetarget.swift; path = sources/AppRetarget.swift; sourceTree = "<group>"; };
 		C12300012F4A1230000AC123 /* CLIBuildStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CLIBuildStatus.swift; path = sources/CLIBuildStatus.swift; sourceTree = "<group>"; };
 		C11800012F4A1180000AC118 /* CompositionFinalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CompositionFinalization.swift; path = sources/CompositionFinalization.swift; sourceTree = "<group>"; };
 		C12100012F4A1210000AC121 /* PagingHitPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PagingHitPaths.swift; path = sources/PagingHitPaths.swift; sourceTree = "<group>"; };
@@ -375,6 +377,7 @@
 				B35D2FE72BF00839009D156B /* BridgingFunctions.swift */,
 				C4A127E197F00000000002 /* CandidateLine.swift */,
 				B3A001012F260100009D156B /* ReservedProperty.swift */,
+				C11900012F4A1190000AC119 /* AppRetarget.swift */,
 				C12300012F4A1230000AC123 /* CLIBuildStatus.swift */,
 				C11800012F4A1180000AC118 /* CompositionFinalization.swift */,
 				C12100012F4A1210000AC121 /* PagingHitPaths.swift */,
@@ -653,6 +656,7 @@
 				B35D2FE82BF00839009D156B /* BridgingFunctions.swift in Sources */,
 				C4A127E197F00000000001 /* CandidateLine.swift in Sources */,
 				B3A001022F260100009D156B /* ReservedProperty.swift in Sources */,
+				C11900022F4A1190000AC119 /* AppRetarget.swift in Sources */,
 				C12300022F4A1230000AC123 /* CLIBuildStatus.swift in Sources */,
 				C11800022F4A1180000AC118 /* CompositionFinalization.swift in Sources */,
 				C12100022F4A1210000AC121 /* PagingHitPaths.swift in Sources */,
