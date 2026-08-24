@@ -14,6 +14,7 @@ The Xcode project is organized around one app target, `Squirrel.app`, plus bundl
 Repo-relative paths:
 
 - `sources/Main.swift`: process entry point, command-line maintenance commands, IMK server creation, app setup, and global librime startup.
+- `sources/CLIBuildStatus.swift`: maps CLI `--build` `rimeAPI.deploy()` success/failure to process exit status and a stable diagnostic. In-app `SquirrelApplicationDelegate.deploy()` does not use this path.
 - `sources/SquirrelApplicationDelegate.swift`: app-wide state. Owns the candidate panel, global `SquirrelConfig`, status item, Sparkle update integration, distributed notifications, and librime setup/finalization.
 - `sources/SquirrelInputController.swift`: the main InputMethodKit controller. Owns one active librime session per controller instance, receives key events, translates macOS events to Rime key events, commits text, updates marked text, and drives the candidate panel.
 - `sources/MacOSKeyCodes.swift`: maps AppKit/Carbon key codes and modifier flags to librime/X11 key symbols and masks.
@@ -41,7 +42,7 @@ App-bundle paths (inside the built `Squirrel.app/Contents`, not the repo tree):
    - `--quit`, `--reload`, `--sync`
    - `--install` / `--register-input-source`
    - `--enable-input-source`, `--disable-input-source`, `--select-input-source`
-   - `--build`
+   - `--build` (exits 0 on successful `rimeAPI.deploy()`; on failure prints `Squirrel --build: deployment failed` to stderr and exits 1)
    - `--ascii`, `--nascii`, `--getascii`
 2. If no maintenance command is handled, it creates an `IMKServer` using `InputMethodConnectionName` from `Info.plist`.
 3. It creates `NSApplication.shared`, assigns `SquirrelApplicationDelegate`, sets accessory activation policy, and changes the current directory to `Bundle.main.sharedSupportPath`. This is important because OpenCC/librime configuration may use relative dictionary paths.
@@ -345,8 +346,8 @@ For config changes:
 
 For lifecycle or command changes:
 
-1. Start in `Main.swift` for command-line behavior.
-2. Start in `SquirrelApplicationDelegate` for app-global observers, Rime setup, status item behavior, and termination.
+1. Start in `Main.swift` for command-line behavior. Route `--build` deploy success/failure through `CLIBuildStatus` so a failed deploy exits nonzero with the stable diagnostic.
+2. Start in `SquirrelApplicationDelegate` for app-global observers, Rime setup, status item behavior, and termination. Do not change in-app `deploy()` when adjusting CLI `--build` status.
 3. Keep distributed notification names stable unless all callers are updated.
 
 For librime plugin/frontend coordination:
@@ -358,7 +359,7 @@ For librime plugin/frontend coordination:
 
 ## Validation Checklist
 
-When possible, validate with Xcode build diagnostics or a full Xcode build. For behavior changes, manually exercise:
+When possible, validate with Xcode build diagnostics or a full Xcode build. CLI `--build` exit-status changes also run `probes/cli_build_status_probe.swift` via `swiftc`. For behavior changes, manually exercise:
 
 - input activation/deactivation in multiple apps;
 - typing, committing, cancelling, and switching input sources mid-composition;
