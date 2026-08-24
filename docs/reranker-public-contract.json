@@ -1,0 +1,106 @@
+{
+  "pinned_plugin": {
+    "repo": "Habit130/librime-llm-rerank",
+    "tag": "v1.0.2",
+    "commit": "7ca5966135faf8a3f2c8710ef88b4a97af772ccf"
+  },
+  "example_yaml": "engine:\n  filters:\n    - llm_rerank\nllm_rerank:\n  reranking_enabled: true\n  recording_enabled: false\n  evidence_enabled: false\n  window: 32\n  alpha: 0.0\n  sys_coeff: 1.0\n  usr_coeff: 1.0\n  gamma: 2.0\n  saturate_k: 3.0\n  deadline_ms: 200\n  baseline_policy_id: mean-token-lm-v1\n",
+  "readme_forbidden_phrases": [
+    "enable:",
+    "socket_path: ~",
+    "不阻塞输入事件处理",
+    "上文窗口字符"
+  ],
+  "schema_keys": {
+    "reranking_enabled": {
+      "default_rendered": "true when no switch keys are set; false if any v2 switch is present and this key is omitted",
+      "source": "src/llm_rerank_config.cc"
+    },
+    "recording_enabled": {
+      "default_rendered": "false",
+      "source": "src/llm_rerank_config.h:39"
+    },
+    "evidence_enabled": {
+      "default_rendered": "false",
+      "source": "src/llm_rerank_config.h:40"
+    },
+    "window": {
+      "default_rendered": "32",
+      "source": "src/llm_rerank_filter.h:142"
+    },
+    "alpha": {
+      "default_rendered": "0.0",
+      "source": "src/llm_rerank_filter.h:147"
+    },
+    "sys_coeff": {
+      "default_rendered": "1.0",
+      "source": "src/llm_rerank_filter.h:148"
+    },
+    "usr_coeff": {
+      "default_rendered": "1.0",
+      "source": "src/llm_rerank_filter.h:149"
+    },
+    "gamma": {
+      "default_rendered": "2.0",
+      "source": "src/llm_rerank_filter.h:150"
+    },
+    "saturate_k": {
+      "default_rendered": "3.0",
+      "source": "src/llm_rerank_filter.h:151"
+    },
+    "deadline_ms": {
+      "default_rendered": "200",
+      "source": "src/llm_rerank_filter.h:152"
+    },
+    "verbose": {
+      "default_rendered": "false",
+      "source": "src/llm_rerank_filter.h:153"
+    },
+    "baseline_policy_id": {
+      "default_rendered": "mean-token-lm-v1",
+      "source": "src/llm_rerank_filter.h:157"
+    },
+    "socket_path": {
+      "default_rendered": "$HOME/Library/Application Support/Squirrel/llm-rerank.sock",
+      "source": "src/llm_rerank_filter.cc:409-414"
+    }
+  },
+  "daemon_keys": {
+    "context_window": {
+      "default_rendered": "64",
+      "source": "daemon/server.py:39"
+    }
+  },
+  "protocol": {
+    "version": 2,
+    "request_fields": [
+      "version",
+      "request_id",
+      "plan_identity",
+      "baseline_policy_id",
+      "context",
+      "candidates"
+    ],
+    "success_response_fields": [
+      "version",
+      "request_id",
+      "plan_identity",
+      "scores"
+    ],
+    "error_response_fields": [
+      "version",
+      "request_id",
+      "plan_identity",
+      "error"
+    ],
+    "error_object_fields": [
+      "code",
+      "message",
+      "occurred_at",
+      "retryable",
+      "phase",
+      "remediation",
+      "cause"
+    ]
+  }
+}
