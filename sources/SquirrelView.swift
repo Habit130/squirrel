@@ -18,10 +18,6 @@ private class SquirrelLayoutDelegate: NSObject, NSTextLayoutManagerDelegate {
   }
 }
 
-extension NSAttributedString.Key {
-  static let noBreak = NSAttributedString.Key("noBreak")
-}
-
 final class SquirrelView: NSView {
   let textView: NSTextView
 
