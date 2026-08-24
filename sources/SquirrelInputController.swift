@@ -213,6 +213,46 @@ final class SquirrelInputController: IMKInputController {
     client = nil
   }
 
+  func compositionFinalizationState(rimeAvailable: Bool) -> CompositionFinalizationState {
+    let pending: String?
+    if rimeAvailable, session != 0, let input = rimeAPI.get_input(session) {
+      pending = String(cString: input)
+    } else {
+      pending = nil
+    }
+    return CompositionFinalizationState(
+      hasActiveController: true,
+      hasSession: session != 0,
+      hasClient: client != nil,
+      pendingInput: pending,
+      rimeAvailable: rimeAvailable
+    )
+  }
+
+  func applyCompositionFinalization(_ plan: CompositionFinalizationPlan) {
+    switch plan.clientAction {
+    case .leaveUnchanged:
+      break
+    case .commitOnce(let text):
+      commit(string: text)
+    case .clearLocalState:
+      preedit = ""
+      hidePalettes()
+    }
+    if plan.hidePanel {
+      hidePalettes()
+    }
+    switch plan.sessionDisposition {
+    case .keep:
+      break
+    case .destroyViaRime:
+      destroySession()
+    case .forgetLocally:
+      session = 0
+      clearChord()
+    }
+  }
+
   override func hidePalettes() {
     NSApp.squirrelAppDelegate.panel?.hide()
     super.hidePalettes()

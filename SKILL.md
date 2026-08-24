@@ -15,6 +15,7 @@ Repo-relative paths:
 
 - `sources/Main.swift`: process entry point, command-line maintenance commands, IMK server creation, app setup, and global librime startup.
 - `sources/SquirrelApplicationDelegate.swift`: app-wide state. Owns the candidate panel, global `SquirrelConfig`, status item, Sparkle update integration, distributed notifications, and librime setup/finalization.
+- `sources/CompositionFinalization.swift`: Foundation-only planner for finalizing the active composition before global session cleanup. Used by deploy, sync, quit, power-off, and process-exit.
 - `sources/SquirrelInputController.swift`: the main InputMethodKit controller. Owns one active librime session per controller instance, receives key events, translates macOS events to Rime key events, commits text, updates marked text, and drives the candidate panel.
 - `sources/MacOSKeyCodes.swift`: maps AppKit/Carbon key codes and modifier flags to librime/X11 key symbols and masks.
 - `sources/SquirrelConfig.swift`: thin typed wrapper over `RimeConfig`, with base config/schema fallback and cached option reads.
@@ -51,7 +52,7 @@ App-bundle paths (inside the built `Squirrel.app/Contents`, not the repo tree):
    - `startRime(fullCheck: false)`
    - `loadSettings()`
    - `app.run()`
-6. On app-run return, it calls `rimeAPI.finalize()`.
+6. On app-run return, it finalizes any active composition, then finalizes librime if it is still initialized.
 
 ## Global Librime Initialization
 
@@ -66,8 +67,8 @@ App-bundle paths (inside the built `Squirrel.app/Contents`, not the repo tree):
 - `startRime(fullCheck:)` calls `rimeAPI.initialize(nil)`, then `start_maintenance(fullCheck)`. On successful maintenance it deploys `squirrel.yaml` with the `config_version` marker.
 - `loadSettings()` opens base `squirrel` config, refreshes notification/status-icon settings, and loads light/dark panel themes.
 - `loadSettings(for schemaID:)` opens the active schema config and, when it has a `style` section, overlays schema-specific panel style. Otherwise it falls back to base config.
-- `shutdownRime()` closes config and calls `rimeAPI.finalize()`.
-- `applicationShouldTerminate(_:)` calls `cleanup_all_sessions()` before termination.
+- `shutdownRime()` closes config and, if librime is still initialized, calls `rimeAPI.finalize()`.
+- `deploy()`, `syncUserData()`, `applicationShouldTerminate(_:)`, `workspaceWillPowerOff(_:)`, and process-exit cleanup all finalize the active composition before invalidating sessions. Idle and no-session paths are no-ops and do not create a session. After `finalize()`, those paths do not call librime except a later `initialize()` on deploy.
 
 Do not initialize/finalize librime from individual input controllers. Controllers own sessions; the application delegate owns the backend lifetime.
 
@@ -312,6 +313,7 @@ Keep these invariants in mind for any change:
 - Every key event path that changes librime state should call `rimeUpdate()` exactly when frontend state needs to be consumed.
 - Do not consume Command shortcuts in normal text input; let client applications handle them.
 - Deactivation must hide the panel and commit or clear active composition so no marked text or panel is stranded.
+- Global session cleanup (`deploy`, `sync_user_data`, quit, power-off, process exit) must finalize the active composition first: commit exactly once when a valid client exists; if the client is unavailable, clear local marked text and the panel without calling librime after finalize.
 - Always guard against nil or stale `IMKTextInput` clients.
 - Convert librime byte offsets into Swift string indices before building `NSRange` values.
 - Keep `get_context`, `get_status`, and `get_commit` free calls paired with successful reads.
@@ -347,7 +349,8 @@ For lifecycle or command changes:
 
 1. Start in `Main.swift` for command-line behavior.
 2. Start in `SquirrelApplicationDelegate` for app-global observers, Rime setup, status item behavior, and termination.
-3. Keep distributed notification names stable unless all callers are updated.
+3. Route global session invalidation through `CompositionFinalization` so composition is finalized before deploy, sync, quit, power-off, or process-exit cleanup.
+4. Keep distributed notification names stable unless all callers are updated.
 
 For librime plugin/frontend coordination:
 
@@ -358,7 +361,7 @@ For librime plugin/frontend coordination:
 
 ## Validation Checklist
 
-When possible, validate with Xcode build diagnostics or a full Xcode build. For behavior changes, manually exercise:
+When possible, validate with Xcode build diagnostics or a full Xcode build. Composition-finalization lifecycle changes also run `probes/composition_finalization_probe.swift` via `swiftc`. For behavior changes, manually exercise:
 
 - input activation/deactivation in multiple apps;
 - typing, committing, cancelling, and switching input sources mid-composition;
