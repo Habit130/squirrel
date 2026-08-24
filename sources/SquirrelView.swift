@@ -18,10 +18,6 @@ private class SquirrelLayoutDelegate: NSObject, NSTextLayoutManagerDelegate {
   }
 }
 
-extension NSAttributedString.Key {
-  static let noBreak = NSAttributedString.Key("noBreak")
-}
-
 final class SquirrelView: NSView {
   let textView: NSTextView
 
@@ -34,8 +30,7 @@ final class SquirrelView: NSView {
   var highlightedPreeditRange: NSRange = .empty
   var separatorWidth: CGFloat = 0
   var shape = CAShapeLayer()
-  private var downPath: CGPath?
-  private var upPath: CGPath?
+  private var pagingHits = PagingHitPaths()
 
   var lightTheme = SquirrelTheme()
   var darkTheme = SquirrelTheme()
@@ -290,12 +285,11 @@ final class SquirrelView: NSView {
     let flipTransform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -self.bounds.height)
     if let downPath {
       panelPath.addPath(downPath, transform: flipTransform)
-      self.downPath = downPath.copy()
     }
     if let upPath {
       panelPath.addPath(upPath, transform: flipTransform)
-      self.upPath = upPath.copy()
     }
+    pagingHits.synchronize(down: downPath, up: upPath)
 
     shape.path = panelPath
   }
@@ -304,11 +298,8 @@ final class SquirrelView: NSView {
     var index = 0
     var candidateIndex: Int?
     var preeditIndex: Int?
-    if let downPath = self.downPath, downPath.contains(clickPoint) {
-      return (nil, nil, false)
-    }
-    if let upPath = self.upPath, upPath.contains(clickPoint) {
-      return (nil, nil, true)
+    if let pagingUp = pagingHits.pagingUp(at: clickPoint) {
+      return (nil, nil, pagingUp)
     }
     if let path = shape.path, path.contains(clickPoint) {
       var point = NSPoint(x: clickPoint.x - textView.textContainerInset.width - currentTheme.pagingOffset,
