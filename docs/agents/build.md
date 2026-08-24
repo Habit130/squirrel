@@ -28,6 +28,21 @@ The top-level `$(RIME_LIBRARY)` rule has no prerequisites. Once `lib/librime.1.d
 
 The llm-rerank plugin also stays pinned on this path. Plugin source changes appear here only after the plugin repository publishes a release built against this repository's exact `rime_version`/`rime_git_hash`, and `action-install.sh` updates `llm_rerank_version` and `llm_rerank_sha256`.
 
+Every artifact `action-install.sh` downloads has a repository-reviewed SHA-256. The script verifies all four hashes before extracting any archive or copying the plugin dylib. A mismatch exits non-zero and leaves the download directory unextracted. `package/pin_build_deps_test.sh` covers that gate.
+
+### Fast-path pin updates
+
+Change these pins together; regenerate a hash with `shasum -a 256 download/<archive>` after fetching the new artifact.
+
+| Bump | Change together |
+| --- | --- |
+| librime release | `rime_version`, `rime_git_hash`, `rime_sha256`, `rime_deps_sha256`. If the plugin was rebuilt against that librime, also `llm_rerank_version` and `llm_rerank_sha256`. |
+| Sparkle | `sparkle_version`, `sparkle_sha256` |
+| llm-rerank | `llm_rerank_version`, `llm_rerank_sha256` (must remain built against the pinned `rime_version` / `rime_git_hash`) |
+| CI action | The full commit SHA and version comment on every `uses:` of that action under `.github/workflows/` |
+
+Do not retarget a mutable tag (`@v6`, `@latest`). Pin `uses: org/action@<40-char-sha> # vX.Y.Z`.
+
 ### Bundled-file manifests
 
 `make release` and `make debug` run `package/add_data_files` before Xcode. The script registers only entries in:
