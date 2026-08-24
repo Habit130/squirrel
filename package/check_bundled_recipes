@@ -1,0 +1,58 @@
+#!/bin/bash
+
+set -euo pipefail
+
+require_installed=0
+if [ "${1:-}" = "--require-installed" ]; then
+    require_installed=1
+fi
+
+contract="package/bundled_recipes"
+data_manifest="package/data_files_manifest"
+
+test -f "${contract}"
+test -f "${data_manifest}"
+test -f action-install.sh
+test -f action-build.sh
+
+grep -Fq 'package/bundled_recipes' action-install.sh
+if grep -q 'SQUIRREL_BUNDLED_RECIPES' action-build.sh; then
+    echo "error: action-build.sh must not define SQUIRREL_BUNDLED_RECIPES; use ${contract}" >&2
+    exit 1
+fi
+if grep -q 'SQUIRREL_BUNDLED_RECIPES' action-install.sh; then
+    echo "error: action-install.sh must read ${contract}, not SQUIRREL_BUNDLED_RECIPES" >&2
+    exit 1
+fi
+
+for recipe in lotem/rime-octagram-data 'lotem/rime-octagram-data@hant'; do
+    if ! grep -Fqx "${recipe}" "${contract}"; then
+        echo "error: ${contract} missing recipe ${recipe}" >&2
+        exit 1
+    fi
+done
+
+grammar_artifacts=(
+    $(grep -E '^(grammar\.yaml|.+\.gram)$' "${data_manifest}")
+)
+
+if [ "${#grammar_artifacts[@]}" -eq 0 ]; then
+    echo "error: ${data_manifest} lists no grammar artifacts" >&2
+    exit 1
+fi
+
+plum_populated=0
+if [ -d data/plum ] && [ -n "$(ls -A data/plum 2>/dev/null || true)" ]; then
+    plum_populated=1
+fi
+
+if [ "${require_installed}" -eq 1 ] || [ "${plum_populated}" -eq 1 ]; then
+    for file in "${grammar_artifacts[@]}"; do
+        if [ ! -f "data/plum/${file}" ]; then
+            echo "error: project grammar artifact data/plum/${file} is missing" >&2
+            exit 1
+        fi
+    done
+fi
+
+echo "bundled recipe contract ok: ${grammar_artifacts[*]}"

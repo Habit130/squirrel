@@ -102,14 +102,10 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>SUEnableAutomaticChecks</key>
-	<true/>
-	<key>SUFeedURL</key>
-	<string>https://rime.github.io/release/squirrel/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>ukvWq2dKOWn3B9AsdsQIwOptiDdDKdUjAVNgFxSvB2o=</string>
+	<false/>
 	<key>TICapsLockLanguageSwitchCapable</key>
 	<true/>
 	<key>SUEnableInstallerLauncherService</key>
-	<true/>
+	<false/>
 </dict>
 </plist>

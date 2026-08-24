@@ -22,7 +22,7 @@ This is the CI and day-to-day frontend path:
 make
 ```
 
-`action-install.sh` downloads the pinned prebuilt `librime.1.dylib`, Sparkle framework, bundled librime plugins, and the pinned universal `librime-llm-rerank.dylib` release artifact. It stages them under `lib/`, `Frameworks/`, and `lib/rime-plugins/`.
+`action-install.sh` downloads the pinned prebuilt `librime.1.dylib`, Sparkle framework, bundled librime plugins, and the pinned universal `librime-llm-rerank.dylib` release artifact. It stages them under `lib/`, `Frameworks/`, and `lib/rime-plugins/`. It also installs the extra plum recipes listed in `package/bundled_recipes` (currently the octagram grammar data). `action-build.sh release` / `package` / `archive` call the same script and must not redeclare that list.
 
 The top-level `$(RIME_LIBRARY)` rule has no prerequisites. Once `lib/librime.1.dylib` exists, `make` and `make debug` do not re-enter the librime build, even if source under `librime/` or `librime/plugins/` changed. Editing those sources has no effect on this path.
 
@@ -50,7 +50,9 @@ Do not retarget a mutable tag (`@v6`, `@latest`). Pin `uses: org/action@<40-char
 - `package/data_files_manifest`
 - `package/rime_plugins_manifest`
 
-Unlisted files left in `data/plum/` or `lib/rime-plugins/` are warned about and never added to `Squirrel.xcodeproj/project.pbxproj`. Missing manifest entries are also warnings. When bundled recipes or the librime release's plugin set changes, update the relevant manifest and project-file references together; never let local build leftovers determine project contents.
+Unlisted files left in `data/plum/` or `lib/rime-plugins/` are warned about and never added to `Squirrel.xcodeproj/project.pbxproj`. Missing manifest entries are also warnings. When bundled recipes or the librime release's plugin set changes, update `package/bundled_recipes`, the relevant manifest, and project-file references together; never let local build leftovers determine project contents.
+
+`package/check_bundled_recipes` is the deterministic contract check: both scripts share that recipe file, and after a clean install the project-referenced grammar artifacts exist under `data/plum/`. Pass `--require-installed` to fail if those files are absent.
 
 ## From-source path
 
@@ -95,7 +97,8 @@ Common targets:
 - `make` / `make release`: release app build
 - `make debug`: debug app build
 - `make package`: installer package; signing/notarization uses `DEV_ID`
-- `make archive`: package plus Sparkle `sign_update` and the distributable archive
+- `make archive`: package plus Sparkle `sign_update` and the versioned installer archive. Appcast generation stays off until this fork owns a signed feed.
+- `make check-update-channel`: fail if Info.plist, the update-channel type, or `package/make_archive` names the upstream rime/squirrel feed, key, or download URL
 - `make install` / `make install-debug` / `make install-release`: install into `/Library/Input Methods`
 - `make clean` / `make clean-deps` / `make clean-package`: remove the corresponding generated artifacts
 
@@ -110,4 +113,4 @@ Use `SKILL.md` for the behavior-specific manual validation checklist. For live t
 
 For librime source changes, use `make -C librime test` or `make -C librime test-debug` as required by the ticket. A separately delivered plugin follows its own repository's test rules in addition to the Squirrel integration path specified by the execution prompt.
 
-CI uses macOS 26 with Xcode 26.5. Commit and pull-request workflows run SwiftLint, `./action-build.sh package`, and Periphery; the release workflow substitutes `./action-build.sh archive` so it also builds Sparkle's `sign_update` tool and the release archive.
+CI uses macOS 26 with Xcode 26.5. Commit and pull-request workflows run SwiftLint, `package/check_bundled_recipes`, `package/check_update_channel`, `./action-build.sh package` (the documented `./action-install.sh && make` plus universal/package flags), and Periphery. After the package build they rerun the recipe check with `--require-installed`. The release workflow substitutes `./action-build.sh archive` so it also builds Sparkle's `sign_update` tool and the versioned installer archive.

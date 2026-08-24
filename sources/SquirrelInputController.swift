@@ -27,12 +27,13 @@ final class SquirrelInputController: IMKInputController {
   private var chordTimer: Timer?
   private var chordDuration: TimeInterval = 0
   private var currentApp: String = ""
+  private var appliedAppOptions: [String: Bool]?
+  private var appOptionDefaults: [String: Bool] = [:]
 
   // swiftlint:disable:next cyclomatic_complexity
   override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
     guard let event = event else { return false }
     let modifiers = event.modifierFlags
-    let changes = lastModifiers.symmetricDifference(modifiers)
 
     // Return true to consume the key event; return false to pass it to the client app.
     var handled = false
@@ -45,10 +46,7 @@ final class SquirrelInputController: IMKInputController {
     }
 
     self.client ?= sender as? IMKTextInput
-    if let app = client?.bundleIdentifier(), currentApp != app {
-      currentApp = app
-      updateAppOptions()
-    }
+    applyClientAppOptions()
 
     switch event.type {
     case .flagsChanged:
@@ -57,36 +55,25 @@ final class SquirrelInputController: IMKInputController {
         break
       }
       var rimeModifiers: UInt32 = SquirrelKeycode.osxModifiersToRime(modifiers: modifiers)
-      // Some remote desktop tools send flagsChanged with keyCode 0; infer the real modifier key when needed.
-      var keyCode = event.keyCode
-      if !SquirrelKeycode.modifierKeycodes.contains(keyCode) {
-        guard let inferred = SquirrelKeycode.inferModifierKeycode(from: changes) else {
-          lastModifiers = modifiers
-          rimeUpdate()
-          handled = true
-          break
-        }
-        keyCode = inferred
-      }
-      let rimeKeycode: UInt32 = SquirrelKeycode.osxKeycodeToRime(keycode: keyCode, keychar: nil, shift: false, caps: false)
-
-      if changes.contains(.capsLock) {
-        // Rime expects XK_Caps_Lock before the lock mask changes; NSFlagsChanged has already applied it.
-        rimeModifiers ^= kLockMask.rawValue
-        _ = processKey(rimeKeycode, modifiers: rimeModifiers)
-      }
-
-      // Process releases first because some modifier releases arrive with the next keydown.
-      var buffer = [(keycode: UInt32, modifier: UInt32)]()
-      for flag in [NSEvent.ModifierFlags.shift, .control, .option, .command] where changes.contains(flag) {
-        if modifiers.contains(flag) {
-          buffer.append((keycode: rimeKeycode, modifier: rimeModifiers))
+      // Each changed modifier keeps its own physical key. Remote-desktop keyCode 0 infers the left-side key.
+      let modifierEvents = ModifierPhysicalKeys.events(
+        lastModifiers: lastModifiers,
+        modifiers: modifiers,
+        eventKeyCode: event.keyCode
+      )
+      for modifierEvent in modifierEvents {
+        let rimeKeycode = SquirrelKeycode.osxKeycodeToRime(
+          keycode: modifierEvent.keyCode, keychar: nil, shift: false, caps: false
+        )
+        if modifierEvent.isCapsLock {
+          // Rime expects XK_Caps_Lock before the lock mask changes; NSFlagsChanged has already applied it.
+          rimeModifiers ^= kLockMask.rawValue
+          _ = processKey(rimeKeycode, modifiers: rimeModifiers)
+        } else if modifierEvent.isRelease {
+          _ = processKey(rimeKeycode, modifiers: rimeModifiers | kReleaseMask.rawValue)
         } else {
-          buffer.insert((keycode: rimeKeycode, modifier: rimeModifiers | kReleaseMask.rawValue), at: 0)
+          _ = processKey(rimeKeycode, modifiers: rimeModifiers)
         }
-      }
-      for (keycode, modifier) in buffer {
-        _ = processKey(keycode, modifiers: modifier)
       }
 
       lastModifiers = modifiers
@@ -166,6 +153,7 @@ final class SquirrelInputController: IMKInputController {
 
   override func activateServer(_ sender: Any!) {
     self.client ?= sender as? IMKTextInput
+    applyClientAppOptions()
     var keyboardLayout = NSApp.squirrelAppDelegate.config?.getString("keyboard_layout") ?? ""
     if keyboardLayout == "last" || keyboardLayout == "" {
       keyboardLayout = ""
@@ -213,6 +201,46 @@ final class SquirrelInputController: IMKInputController {
     client = nil
   }
 
+  func compositionFinalizationState(rimeAvailable: Bool) -> CompositionFinalizationState {
+    let pending: String?
+    if rimeAvailable, session != 0, let input = rimeAPI.get_input(session) {
+      pending = String(cString: input)
+    } else {
+      pending = nil
+    }
+    return CompositionFinalizationState(
+      hasActiveController: true,
+      hasSession: session != 0,
+      hasClient: client != nil,
+      pendingInput: pending,
+      rimeAvailable: rimeAvailable
+    )
+  }
+
+  func applyCompositionFinalization(_ plan: CompositionFinalizationPlan) {
+    switch plan.clientAction {
+    case .leaveUnchanged:
+      break
+    case .commitOnce(let text):
+      commit(string: text)
+    case .clearLocalState:
+      preedit = ""
+      hidePalettes()
+    }
+    if plan.hidePanel {
+      hidePalettes()
+    }
+    switch plan.sessionDisposition {
+    case .keep:
+      break
+    case .destroyViaRime:
+      destroySession()
+    case .forgetLocally:
+      session = 0
+      clearChord()
+    }
+  }
+
   override func hidePalettes() {
     NSApp.squirrelAppDelegate.panel?.hide()
     super.hidePalettes()
@@ -240,8 +268,6 @@ final class SquirrelInputController: IMKInputController {
     setting.target = self
     let wiki = NSMenuItem(title: NSLocalizedString("Rime Wiki...", comment: "Menu item"), action: #selector(openWiki), keyEquivalent: "")
     wiki.target = self
-    let update = NSMenuItem(title: NSLocalizedString("Check for updates...", comment: "Menu item"), action: #selector(checkForUpdates), keyEquivalent: "")
-    update.target = self
 
     let menu = NSMenu()
     menu.addItem(deploy)
@@ -249,7 +275,6 @@ final class SquirrelInputController: IMKInputController {
     menu.addItem(logDir)
     menu.addItem(setting)
     menu.addItem(wiki)
-    menu.addItem(update)
 
     return menu
   }
@@ -268,10 +293,6 @@ final class SquirrelInputController: IMKInputController {
 
   @objc func openRimeFolder() {
     NSApp.squirrelAppDelegate.openRimeFolder()
-  }
-
-  @objc func checkForUpdates() {
-    NSApp.squirrelAppDelegate.checkForUpdates()
   }
 
   @objc func openWiki() {
@@ -349,35 +370,81 @@ private extension SquirrelInputController {
   }
 
   func createSession() {
-    let app = client?.bundleIdentifier() ?? {
-      SquirrelInputController.unknownAppCnt &+= 1
-      return "UnknownApp\(SquirrelInputController.unknownAppCnt)"
-    }()
-    print("createSession: \(app)")
-    currentApp = app
+    appliedAppOptions = nil
+    appOptionDefaults = [:]
     session = rimeAPI.create_session()
     schemaId = ""
+    if session != 0, let keys = NSApp.squirrelAppDelegate.config?.allAppOptionKeys() {
+      for key in keys {
+        appOptionDefaults[key] = rimeAPI.get_option(session, key)
+      }
+    }
+    applyClientAppOptions()
+    print("createSession: \(currentApp)")
+  }
 
+  func applyClientAppOptions() {
+    let incomingBundle = client?.bundleIdentifier()
+    let identity = AppRetarget.resolveApp(
+      bundleIdentifier: incomingBundle,
+      currentApp: currentApp,
+      nextUnknownIndex: Self.unknownAppCnt
+    )
+    if !identity.appChanged, appliedAppOptions != nil, session != 0 {
+      currentApp = identity.name
+      Self.unknownAppCnt = identity.nextUnknownIndex
+      return
+    }
+    let incoming = NSApp.squirrelAppDelegate.config?.getAppOptions(identity.name) ?? [:]
+    var currentValues: [String: Bool] = [:]
     if session != 0 {
-      updateAppOptions()
+      for key in incoming.keys {
+        currentValues[key] = rimeAPI.get_option(session, key)
+      }
+    }
+    let plan = AppRetarget.plan(
+      for: AppRetargetState(
+        currentApp: currentApp,
+        incomingBundleID: incomingBundle,
+        nextUnknownIndex: Self.unknownAppCnt,
+        appliedOptions: appliedAppOptions,
+        schemaDefaults: appOptionDefaults,
+        incomingOptions: incoming,
+        currentOptionValues: currentValues,
+        hasSession: session != 0
+      )
+    )
+    currentApp = plan.appName
+    Self.unknownAppCnt = plan.nextUnknownIndex
+    appliedAppOptions = plan.nextApplied
+    appOptionDefaults = plan.nextDefaults
+    if session != 0 {
+      for mutation in plan.mutations {
+        print("set app option: \(mutation.key) = \(mutation.value)")
+        rimeAPI.set_option(session, mutation.key, mutation.value)
+      }
+      if plan.refreshInline {
+        refreshInlinePresentation()
+        if let reportBundleID = NSApp.squirrelAppDelegate.config?.getBool("unsafe/report_bundleid"), reportBundleID {
+          currentApp.withCString { name in
+            rimeAPI.set_property(session, "client_app", name)
+          }
+        }
+      }
     }
   }
 
-  func updateAppOptions() {
-    if currentApp == "" {
-      return
-    }
-    if let appOptions = NSApp.squirrelAppDelegate.config?.getAppOptions(currentApp) {
-      for (key, value) in appOptions {
-        print("set app option: \(key) = \(value)")
-        rimeAPI.set_option(session, key, value)
-      }
-    }
-    if let reportBundleID = NSApp.squirrelAppDelegate.config?.getBool("unsafe/report_bundleid"), reportBundleID {
-      currentApp.withCString { name in
-        rimeAPI.set_property(session, "client_app", name)
-      }
-    }
+  func refreshInlinePresentation() {
+    guard session != 0, let panel = NSApp.squirrelAppDelegate.panel else { return }
+    let presentation = AppRetarget.inlinePresentation(
+      panelInlinePreedit: panel.inlinePreedit,
+      panelInlineCandidate: panel.inlineCandidate,
+      noInline: rimeAPI.get_option(session, "no_inline"),
+      inline: rimeAPI.get_option(session, "inline")
+    )
+    inlinePreedit = presentation.inlinePreedit
+    inlineCandidate = presentation.inlineCandidate
+    rimeAPI.set_option(session, "soft_cursor", presentation.softCursor)
   }
 
   func destroySession() {
@@ -446,11 +513,7 @@ private extension SquirrelInputController {
       if let schema_id = status.schema_id, schemaId == "" || schemaId != String(cString: schema_id) {
         schemaId = String(cString: schema_id)
         NSApp.squirrelAppDelegate.loadSettings(for: schemaId)
-        if let panel = NSApp.squirrelAppDelegate.panel {
-          inlinePreedit = (panel.inlinePreedit && !rimeAPI.get_option(session, "no_inline")) || rimeAPI.get_option(session, "inline")
-          inlineCandidate = panel.inlineCandidate && !rimeAPI.get_option(session, "no_inline")
-          rimeAPI.set_option(session, "soft_cursor", !inlinePreedit)
-        }
+        refreshInlinePresentation()
       }
       _ = rimeAPI.free_status(&status)
     }

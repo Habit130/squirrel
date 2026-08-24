@@ -77,11 +77,15 @@ install_squirrel_deps() {
     mkdir -p lib/rime-plugins
     cp "download/${llm_rerank_archive}" lib/rime-plugins/
 
-    echo "SQUIRREL_BUNDLED_RECIPES=${SQUIRREL_BUNDLED_RECIPES}"
+    bundled_recipes_file="package/bundled_recipes"
+    test -f "${bundled_recipes_file}"
+    bundled_recipes=(
+        $(grep -vE '^[[:space:]]*(#|$)' "${bundled_recipes_file}")
+    )
+    echo "bundled recipes: ${bundled_recipes[*]}"
 
     git submodule update --init plum
-    # install Rime recipes
-    rime_dir=plum/output bash plum/rime-install ${SQUIRREL_BUNDLED_RECIPES}
+    rime_dir=plum/output bash plum/rime-install "${bundled_recipes[@]}"
     make copy-plum-data
 }
 

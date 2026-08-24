@@ -224,37 +224,24 @@ final class SquirrelPanel: NSPanel {
       let candidate = candidates[i].precomposedStringWithCanonicalMapping
       let comment = comments[i].precomposedStringWithCanonicalMapping
 
-      let line = NSMutableAttributedString(string: theme.candidateFormat, attributes: labelAttrs)
-      for range in line.string.ranges(of: /\[candidate\]/) {
-        let convertedRange = convert(range: range, in: line.string)
-        line.addAttributes(attrs, range: convertedRange)
-        if candidate.count <= 5 {
-          line.addAttribute(.noBreak, value: true, range: NSRange(location: convertedRange.location+1, length: convertedRange.length-1))
+      var commentAttrsForRow = commentAttrs
+      // Apply semantic accent/warning colors only for non-highlighted rows
+      if let inputController, !inputController.specialCommentIndices.isEmpty && i != index {
+        if let accent = inputController.specialCommentIndices[.commentHighlight], accent.contains(i) {
+          commentAttrsForRow[.foregroundColor] = theme.accentCommentTextColor
+        } else if let warning = inputController.specialCommentIndices[.commentWarning], warning.contains(i) {
+          commentAttrsForRow[.foregroundColor] = theme.warningCommentTextColor
         }
       }
-      for range in line.string.ranges(of: /\[comment\]/) {
-        let convertedRange = convert(range: range, in: line.string)
-        // Apply semantic accent/warning colors only for non-highlighted rows
-        if let inputController, !inputController.specialCommentIndices.isEmpty && i != index {
-          var newCommentAttrs = commentAttrs
-          if let accent = inputController.specialCommentIndices[.commentHighlight], accent.contains(i) {
-            newCommentAttrs[.foregroundColor] = theme.accentCommentTextColor
-          } else if let warning = inputController.specialCommentIndices[.commentWarning], warning.contains(i) {
-            newCommentAttrs[.foregroundColor] = theme.warningCommentTextColor
-          }
-          line.addAttributes(newCommentAttrs, range: convertedRange)
-        } else {
-          line.addAttributes(commentAttrs, range: convertedRange)
-        }
-      }
-      line.mutableString.replaceOccurrences(of: "[label]", with: label, range: NSRange(location: 0, length: line.length))
-      let labeledLine = line.copy() as! NSAttributedString
-      line.mutableString.replaceOccurrences(of: "[candidate]", with: candidate, range: NSRange(location: 0, length: line.length))
-      line.mutableString.replaceOccurrences(of: "[comment]", with: comment, range: NSRange(location: 0, length: line.length))
-
-      if line.length <= 10 {
-        line.addAttribute(.noBreak, value: true, range: NSRange(location: 1, length: line.length-1))
-      }
+      let (line, labeledLine) = CandidateLine.build(
+        format: theme.candidateFormat,
+        label: label,
+        candidate: candidate,
+        comment: comment,
+        labelAttrs: labelAttrs,
+        candidateAttrs: attrs,
+        commentAttrs: commentAttrsForRow
+      )
 
       let lineSeparator = NSAttributedString(string: linear ? "  " : "\n", attributes: attrs)
       if i > 0 {
@@ -542,12 +529,6 @@ private extension SquirrelPanel {
     statusTimer = Timer.scheduledTimer(withTimeInterval: SquirrelTheme.showStatusDuration, repeats: false) { _ in
       self.hide()
     }
-  }
-
-  func convert(range: Range<String.Index>, in string: String) -> NSRange {
-    let startPos = range.lowerBound.utf16Offset(in: string)
-    let endPos = range.upperBound.utf16Offset(in: string)
-    return NSRange(location: startPos, length: endPos - startPos)
   }
 
   static func makeBackgroundView() -> NSView {

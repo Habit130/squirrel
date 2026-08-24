@@ -1,0 +1,10 @@
+# Extra plum recipes installed by the documented fast path
+# (./action-install.sh && make) and by action-build.sh release/package/archive.
+#
+# action-install.sh is the only consumer. Do not redeclare this list in
+# action-build.sh or via SQUIRREL_BUNDLED_RECIPES. When the set changes,
+# update package/data_files_manifest and the Xcode project references
+# together. One recipe per line; blank lines and lines starting with # are
+# ignored.
+lotem/rime-octagram-data
+lotem/rime-octagram-data@hant
