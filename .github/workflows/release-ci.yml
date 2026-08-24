@@ -28,11 +28,17 @@ jobs:
       - name: Lint
         run: swiftlint
 
+      - name: Check bundled recipe contract
+        run: bash package/check_bundled_recipes
+
       - name: Check update channel
         run: bash package/check_update_channel
 
       - name: Build Squirrel
         run: ./action-build.sh archive
+
+      - name: Verify installed grammar data
+        run: bash package/check_bundled_recipes --require-installed
 
       - name: Install periphery
         run: brew install peripheryapp/periphery/periphery
