@@ -20,6 +20,7 @@ Repo-relative paths:
 - `sources/SquirrelInputController.swift`: the main InputMethodKit controller. Owns one active librime session per controller instance, receives key events, translates macOS events to Rime key events, commits text, updates marked text, and drives the candidate panel.
 - `sources/AppRetarget.swift`: Foundation-only planner for isolating `app_options` when IMK retargets a controller. Diffs applied keys, restores schema defaults for A-only options, and recomputes inline/soft_cursor without resetting the session.
 - `sources/MacOSKeyCodes.swift`: maps AppKit/Carbon key codes and modifier flags to librime/X11 key symbols and masks.
+- `sources/ModifierPhysicalKeys.swift`: resolves each changed `.flagsChanged` modifier to its own physical or inferred Carbon key and orders releases before presses.
 - `sources/SquirrelConfig.swift`: thin typed wrapper over `RimeConfig`, with base config/schema fallback and cached option reads.
 - `sources/SquirrelTheme.swift`: converts Rime/Squirrel style configuration into fonts, colors, layout flags, candidate formatting, and drawing attributes.
 - `sources/SquirrelPanel.swift`: nonactivating candidate/status panel. Builds attributed candidate text, positions the panel near the text cursor, handles paging/candidate mouse events, and delegates selection actions back to the input controller.
@@ -98,7 +99,7 @@ The critical loop is `handle(_:client:) -> Bool` in `SquirrelInputController`.
 4. For `.flagsChanged`:
    - Compute changed modifier flags by comparing with `lastModifiers`.
    - Convert modifiers with `SquirrelKeycode.osxModifiersToRime`.
-   - Validate or infer modifier keycode. This protects against remote desktop tools sending bogus keycode 0 for modifier events.
+   - Resolve each changed modifier through `ModifierPhysicalKeys`. Preserve left/right identity when the event key code names that modifier; otherwise infer the left-side key. This covers delayed multi-bit reconciliation and remote-desktop keycode 0.
    - Handle caps lock specially because librime expects `XK_Caps_Lock` before lock-mask state changes.
    - Process modifier releases before presses to handle delayed release events.
    - Update `lastModifiers` and call `rimeUpdate()`.
@@ -121,7 +122,7 @@ The critical loop is `handle(_:client:) -> Bool` in `SquirrelInputController`.
 - If librime does not handle a Vim-like command-mode escape (`Esc`, `Ctrl-C`, `Ctrl-[`) and `vim_mode` is set, it forces `ascii_mode` on unless already in ASCII mode.
 - If librime handles a key while `_chord_typing` is active, printable keys and modifiers are recorded and later released by a timer. Non-chording keys clear the chord buffer.
 
-`MacOSKeyCodes.swift` is intentionally centralized. Add key translations there rather than scattering keycode conditionals through the controller.
+`MacOSKeyCodes.swift` is intentionally centralized. Add key translations there rather than scattering keycode conditionals through the controller. Multi-bit modifier identity and release-before-press ordering belong in `ModifierPhysicalKeys`.
 
 ## Rime Update and Dataflow
 

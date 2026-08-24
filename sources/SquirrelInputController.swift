@@ -34,7 +34,6 @@ final class SquirrelInputController: IMKInputController {
   override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
     guard let event = event else { return false }
     let modifiers = event.modifierFlags
-    let changes = lastModifiers.symmetricDifference(modifiers)
 
     // Return true to consume the key event; return false to pass it to the client app.
     var handled = false
@@ -56,36 +55,25 @@ final class SquirrelInputController: IMKInputController {
         break
       }
       var rimeModifiers: UInt32 = SquirrelKeycode.osxModifiersToRime(modifiers: modifiers)
-      // Some remote desktop tools send flagsChanged with keyCode 0; infer the real modifier key when needed.
-      var keyCode = event.keyCode
-      if !SquirrelKeycode.modifierKeycodes.contains(keyCode) {
-        guard let inferred = SquirrelKeycode.inferModifierKeycode(from: changes) else {
-          lastModifiers = modifiers
-          rimeUpdate()
-          handled = true
-          break
-        }
-        keyCode = inferred
-      }
-      let rimeKeycode: UInt32 = SquirrelKeycode.osxKeycodeToRime(keycode: keyCode, keychar: nil, shift: false, caps: false)
-
-      if changes.contains(.capsLock) {
-        // Rime expects XK_Caps_Lock before the lock mask changes; NSFlagsChanged has already applied it.
-        rimeModifiers ^= kLockMask.rawValue
-        _ = processKey(rimeKeycode, modifiers: rimeModifiers)
-      }
-
-      // Process releases first because some modifier releases arrive with the next keydown.
-      var buffer = [(keycode: UInt32, modifier: UInt32)]()
-      for flag in [NSEvent.ModifierFlags.shift, .control, .option, .command] where changes.contains(flag) {
-        if modifiers.contains(flag) {
-          buffer.append((keycode: rimeKeycode, modifier: rimeModifiers))
+      // Each changed modifier keeps its own physical key. Remote-desktop keyCode 0 infers the left-side key.
+      let modifierEvents = ModifierPhysicalKeys.events(
+        lastModifiers: lastModifiers,
+        modifiers: modifiers,
+        eventKeyCode: event.keyCode
+      )
+      for modifierEvent in modifierEvents {
+        let rimeKeycode = SquirrelKeycode.osxKeycodeToRime(
+          keycode: modifierEvent.keyCode, keychar: nil, shift: false, caps: false
+        )
+        if modifierEvent.isCapsLock {
+          // Rime expects XK_Caps_Lock before the lock mask changes; NSFlagsChanged has already applied it.
+          rimeModifiers ^= kLockMask.rawValue
+          _ = processKey(rimeKeycode, modifiers: rimeModifiers)
+        } else if modifierEvent.isRelease {
+          _ = processKey(rimeKeycode, modifiers: rimeModifiers | kReleaseMask.rawValue)
         } else {
-          buffer.insert((keycode: rimeKeycode, modifier: rimeModifiers | kReleaseMask.rawValue), at: 0)
+          _ = processKey(rimeKeycode, modifiers: rimeModifiers)
         }
-      }
-      for (keycode, modifier) in buffer {
-        _ = processKey(keycode, modifiers: modifier)
       }
 
       lastModifiers = modifiers
