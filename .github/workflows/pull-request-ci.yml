@@ -20,6 +20,9 @@ jobs:
       - name: Lint
         run: swiftlint
 
+      - name: Check update channel
+        run: bash package/check_update_channel
+
       - name: Configure build environment
         run: |
           echo git_ref_name="$(git describe --always)" >> $GITHUB_ENV

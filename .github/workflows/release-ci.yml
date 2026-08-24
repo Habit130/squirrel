@@ -28,6 +28,9 @@ jobs:
       - name: Lint
         run: swiftlint
 
+      - name: Check update channel
+        run: bash package/check_update_channel
+
       - name: Build Squirrel
         run: ./action-build.sh archive
 

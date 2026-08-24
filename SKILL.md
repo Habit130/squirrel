@@ -14,7 +14,7 @@ The Xcode project is organized around one app target, `Squirrel.app`, plus bundl
 Repo-relative paths:
 
 - `sources/Main.swift`: process entry point, command-line maintenance commands, IMK server creation, app setup, and global librime startup.
-- `sources/SquirrelApplicationDelegate.swift`: app-wide state. Owns the candidate panel, global `SquirrelConfig`, status item, Sparkle update integration, distributed notifications, and librime setup/finalization.
+- `sources/SquirrelApplicationDelegate.swift`: app-wide state. Owns the candidate panel, global `SquirrelConfig`, status item, the disabled fork update channel, distributed notifications, and librime setup/finalization.
 - `sources/SquirrelInputController.swift`: the main InputMethodKit controller. Owns one active librime session per controller instance, receives key events, translates macOS events to Rime key events, commits text, updates marked text, and drives the candidate panel.
 - `sources/MacOSKeyCodes.swift`: maps AppKit/Carbon key codes and modifier flags to librime/X11 key symbols and masks.
 - `sources/SquirrelConfig.swift`: thin typed wrapper over `RimeConfig`, with base config/schema fallback and cached option reads.
@@ -24,7 +24,7 @@ Repo-relative paths:
 - `sources/ReservedProperty.swift`: reserved librime plugin property protocol for frontend UI hints such as comment highlighting and UI refresh.
 - `sources/BridgingFunctions.swift`: Swift helpers for C bridge structs, persistent C strings, optional assignment, and geometry utilities.
 - `sources/InputSource.swift`: Text Input Source registration, enable/disable/select helpers, and current input source lookup.
-- `resources/Info.plist`: InputMethodKit registration metadata, input modes (`Hans`, `Hant`), IMK controller class names, connection name, Sparkle metadata, and input-source properties.
+- `resources/Info.plist`: InputMethodKit registration metadata, input modes (`Hans`, `Hant`), IMK controller class names, connection name, disabled Sparkle keys, and input-source properties.
 - `resources/Squirrel.entitlements`: disables App Sandbox, enables network client access, and disables library validation for bundled dylibs/frameworks.
 - `data/squirrel.yaml`: checked-in source for the default frontend settings. `data/plum/` and `data/opencc/` are generated staging trees, not authoritative configuration sources.
 

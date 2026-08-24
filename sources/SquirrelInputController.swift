@@ -240,8 +240,6 @@ final class SquirrelInputController: IMKInputController {
     setting.target = self
     let wiki = NSMenuItem(title: NSLocalizedString("Rime Wiki...", comment: "Menu item"), action: #selector(openWiki), keyEquivalent: "")
     wiki.target = self
-    let update = NSMenuItem(title: NSLocalizedString("Check for updates...", comment: "Menu item"), action: #selector(checkForUpdates), keyEquivalent: "")
-    update.target = self
 
     let menu = NSMenu()
     menu.addItem(deploy)
@@ -249,7 +247,6 @@ final class SquirrelInputController: IMKInputController {
     menu.addItem(logDir)
     menu.addItem(setting)
     menu.addItem(wiki)
-    menu.addItem(update)
 
     return menu
   }
@@ -268,10 +265,6 @@ final class SquirrelInputController: IMKInputController {
 
   @objc func openRimeFolder() {
     NSApp.squirrelAppDelegate.openRimeFolder()
-  }
-
-  @objc func checkForUpdates() {
-    NSApp.squirrelAppDelegate.checkForUpdates()
   }
 
   @objc func openWiki() {
