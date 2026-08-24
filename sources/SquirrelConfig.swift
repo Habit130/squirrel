@@ -112,6 +112,19 @@ final class SquirrelConfig {
     rimeAPI.config_end(&iterator)
     return appOptions
   }
+
+  func allAppOptionKeys() -> Set<String> {
+    var keys = Set<String>()
+    var apps = RimeConfigIterator()
+    _ = rimeAPI.config_begin_map(&apps, &config, "app_options")
+    while rimeAPI.config_next(&apps) {
+      if let app = apps.key {
+        keys.formUnion(getAppOptions(String(cString: app)).keys)
+      }
+    }
+    rimeAPI.config_end(&apps)
+    return keys
+  }
 }
 
 private extension SquirrelConfig {

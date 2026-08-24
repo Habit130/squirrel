@@ -1,0 +1,65 @@
+#!/bin/bash
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CHANNEL_SOURCE="${ROOT}/sources/SquirrelApplicationDelegate.swift"
+INFO_PLIST="${ROOT}/resources/Info.plist"
+ARCHIVE_SCRIPT="${ROOT}/package/make_archive"
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+plist_value_after() {
+  local key="$1"
+  awk -v key="${key}" '
+    $0 ~ "<key>" key "</key>" { getline; print; exit }
+  ' "${INFO_PLIST}"
+}
+
+[ -f "${CHANNEL_SOURCE}" ] || fail "missing ${CHANNEL_SOURCE}"
+[ -f "${INFO_PLIST}" ] || fail "missing ${INFO_PLIST}"
+[ -f "${ARCHIVE_SCRIPT}" ] || fail "missing ${ARCHIVE_SCRIPT}"
+
+owner="$(sed -n 's/.*static let repositoryOwner = "\([^"]*\)".*/\1/p' "${CHANNEL_SOURCE}" | head -n 1)"
+[ -n "${owner}" ] || fail "SquirrelUpdateChannel.repositoryOwner not found"
+[ "${owner}" = "Habit130" ] || fail "channel owner is '${owner}', expected Habit130"
+echo "update channel owner: ${owner}"
+
+forbidden_patterns=(
+  "rime.github.io/release/squirrel"
+  "rime.github.io/testing/squirrel"
+  "github.com/rime/squirrel/releases"
+  "ukvWq2dKOWn3B9AsdsQIwOptiDdDKdUjAVNgFxSvB2o="
+)
+
+for path in "${INFO_PLIST}" "${CHANNEL_SOURCE}" "${ARCHIVE_SCRIPT}"; do
+  for pattern in "${forbidden_patterns[@]}"; do
+    if grep -F -n -- "${pattern}" "${path}"; then
+      fail "${path} names upstream updater identifier: ${pattern}"
+    fi
+  done
+done
+
+if grep -q "<key>SUFeedURL</key>" "${INFO_PLIST}"; then
+  fail "Info.plist still declares SUFeedURL"
+fi
+if grep -q "<key>SUPublicEDKey</key>" "${INFO_PLIST}"; then
+  fail "Info.plist still declares SUPublicEDKey"
+fi
+
+automatic_checks="$(plist_value_after SUEnableAutomaticChecks)"
+[ -n "${automatic_checks}" ] || fail "SUEnableAutomaticChecks is missing"
+echo "${automatic_checks}" | grep -q "<false/>" || fail "SUEnableAutomaticChecks is not disabled: ${automatic_checks}"
+
+if grep -n "startingUpdater: true" "${ROOT}"/sources/*.swift; then
+  fail "Sparkle updater is started automatically"
+fi
+
+if grep -n "func checkForUpdates" "${ROOT}"/sources/*.swift; then
+  fail "manual update action is still implemented"
+fi
+
+echo "update channel check passed"

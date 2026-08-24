@@ -6,56 +6,40 @@
 //
 
 import UserNotifications
-import Sparkle
 import AppKit
 import InputMethodKit
 
-final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUStandardUserDriverDelegate, UNUserNotificationCenterDelegate {
+enum SquirrelUpdateChannel {
+  static let repositoryOwner = "Habit130"
+  static let feedURL: URL? = nil
+  static let publicEDKey: String? = nil
+  static let automaticChecksEnabled = false
+  static let manualChecksEnabled = false
+
+  static func validate() {
+    assert(repositoryOwner == "Habit130")
+    assert(feedURL == nil)
+    assert(publicEDKey == nil)
+    assert(!automaticChecksEnabled)
+    assert(!manualChecksEnabled)
+  }
+}
+
+final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
   static let rimeWikiURL = URL(string: "https://github.com/rime/home/wiki")!
-  static let updateNotificationIdentifier = "SquirrelUpdateNotification"
   static let notificationIdentifier = "SquirrelNotification"
 
   let rimeAPI: RimeApi_stdbool = rime_get_api_stdbool().pointee
+  // librime calls are illegal after finalize until the next initialize.
+  private var rimeAvailable = false
   var config: SquirrelConfig?
   var panel: SquirrelPanel?
   var enableNotifications = false
   var showStatusIcon: Bool = true
   var statusItem: NSStatusItem?
-  let updateController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
-  var supportsGentleScheduledUpdateReminders: Bool {
-    true
-  }
-
-  func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
-    NSApp.setActivationPolicy(.regular)
-    if !state.userInitiated {
-      NSApp.dockTile.badgeLabel = "1"
-      let content = UNMutableNotificationContent()
-      content.title = NSLocalizedString("A new update is available", comment: "Update")
-      content.body = NSLocalizedString("Version [version] is now available", comment: "Update").replacingOccurrences(of: "[version]", with: update.displayVersionString)
-      let request = UNNotificationRequest(identifier: Self.updateNotificationIdentifier, content: content, trigger: nil)
-      UNUserNotificationCenter.current().add(request)
-    }
-  }
-
-  func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
-    NSApp.dockTile.badgeLabel = ""
-    UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [Self.updateNotificationIdentifier])
-  }
-
-  func standardUserDriverWillFinishUpdateSession() {
-    NSApp.setActivationPolicy(.accessory)
-  }
-
-  func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
-    if response.notification.request.identifier == Self.updateNotificationIdentifier && response.actionIdentifier == UNNotificationDefaultActionIdentifier {
-      updateController.updater.checkForUpdates()
-    }
-
-    completionHandler()
-  }
 
   func applicationWillFinishLaunching(_ notification: Notification) {
+    SquirrelUpdateChannel.validate()
     panel = SquirrelPanel(position: .zero)
     refreshStatusItem()
     addObservers()
@@ -80,14 +64,12 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
 
   func deploy() {
     print("Start maintenance...")
-    self.shutdownRime()
-    self.startRime(fullCheck: true)
-    self.loadSettings()
+    applyGlobalLifecycle(.deploy)
   }
 
   func syncUserData() {
     print("Sync user data")
-    _ = rimeAPI.sync_user_data()
+    applyGlobalLifecycle(.syncUserData)
   }
 
   func openLogFolder() {
@@ -96,15 +78,6 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
 
   func openRimeFolder() {
     NSWorkspace.shared.open(SquirrelApp.userDir)
-  }
-
-  func checkForUpdates() {
-    if updateController.updater.canCheckForUpdates {
-      print("Checking for updates")
-      updateController.updater.checkForUpdates()
-    } else {
-      print("Cannot check for updates")
-    }
   }
 
   func openWiki() {
@@ -161,6 +134,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
   func startRime(fullCheck: Bool) {
     print("Initializing la rime...")
     rimeAPI.initialize(nil)
+    rimeAvailable = true
     if rimeAPI.start_maintenance(fullCheck) {
       _ = rimeAPI.deploy_config_file("squirrel.yaml", "config_version")
     }
@@ -244,8 +218,12 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate, SPUSta
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     print("Squirrel is quitting.")
-    rimeAPI.cleanup_all_sessions()
+    applyGlobalLifecycle(.terminate)
     return .terminateNow
+  }
+
+  func applyGlobalLifecycle(_ operation: GlobalLifecycleOperation) {
+    CompositionFinalization.perform(operation, on: self)
   }
 
 }
@@ -393,12 +371,14 @@ private extension SquirrelApplicationDelegate {
 
   func shutdownRime() {
     config?.close()
+    guard rimeAvailable else { return }
     rimeAPI.finalize()
+    rimeAvailable = false
   }
 
   func workspaceWillPowerOff(_: Notification) {
     print("Finalizing before logging out.")
-    self.shutdownRime()
+    applyGlobalLifecycle(.powerOff)
   }
 
   func rimeNeedsReload(_: Notification) {
@@ -434,6 +414,40 @@ private extension SquirrelApplicationDelegate {
       } catch {
         print("Error creating user data directory: \(path.path())")
       }
+    }
+  }
+}
+
+extension SquirrelApplicationDelegate: CompositionFinalizationHost {
+  func currentCompositionState() -> CompositionFinalizationState {
+    panel?.inputController?.compositionFinalizationState(rimeAvailable: rimeAvailable)
+      ?? .inactive(rimeAvailable: rimeAvailable)
+  }
+
+  func applyCompositionFinalization(_ plan: CompositionFinalizationPlan) {
+    if let controller = panel?.inputController {
+      controller.applyCompositionFinalization(plan)
+      return
+    }
+    if plan.hidePanel {
+      panel?.hide()
+    }
+  }
+
+  func applyBackendFollowUp(_ followUp: BackendFollowUp) {
+    switch followUp {
+    case .none:
+      break
+    case .shutdownAndReinitialize:
+      shutdownRime()
+      startRime(fullCheck: true)
+      loadSettings()
+    case .syncUserData:
+      _ = rimeAPI.sync_user_data()
+    case .cleanupAllSessions:
+      rimeAPI.cleanup_all_sessions()
+    case .shutdown:
+      shutdownRime()
     }
   }
 }

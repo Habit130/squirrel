@@ -138,7 +138,10 @@ clean-sparkle:
 	rm -rf Frameworks/* > /dev/null 2>&1 || true
 	rm -rf Sparkle/build > /dev/null 2>&1 || true
 
-.PHONY: package archive
+.PHONY: package archive check-update-channel
+
+check-update-channel:
+	bash package/check_update_channel
 
 $(PACKAGE):
 ifdef DEV_ID
