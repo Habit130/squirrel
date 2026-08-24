@@ -46,7 +46,7 @@ An orchestration session coordinates issue delivery rather than implementing the
 
 The **orchestration scope** is the set of issues the session currently coordinates. It is task-dependent rather than fixed to one issue, one map, or the whole project. The orchestration session proposes the included issues and explicit exclusions; the owner confirms the scope and any later expansion. An issue cannot belong to two active orchestration scopes. Replacing the orchestration session requires an explicit handoff of the scope, live frontier, active execution sessions, branches and PRs, consumed attempts, outstanding findings, and shared-state allocations; the replacement must still refresh the live state before acting.
 
-The **orchestration session** must be capable of independently understanding and accepting the highest-judgment work in its scope. It shapes work for cost-effective execution, writes self-contained execution prompts, diagnoses failed acceptance, and recommends the required executor capability. It may write only orchestration artifacts listed in `AGENTS.md`; it never implements or repairs a dispatched product-code issue, either directly or through a subagent. The owner starts every execution session by transferring the frozen prompt to a separately chosen agent.
+The **orchestration session** must be capable of independently understanding and accepting the highest-judgment work in its scope. It shapes work for cost-effective execution, writes frozen execution prompts, diagnoses failed acceptance, and recommends the required executor capability. It may write only orchestration artifacts listed in `AGENTS.md`; it never implements or repairs a dispatched product-code issue, either directly or through a subagent. The owner starts every execution session by transferring the frozen prompt to a separately chosen agent.
 
 An **execution chain** contains the attempts to deliver one issue. For a code delivery, every attempt continues on the same feature branch and PR. Only one execution session may write to a delivery at a time. The previous writer must hand back and release it, or the owner must explicitly terminate that session, before another executor takes over. Different issues may proceed concurrently only after their worktrees and machine-level shared state have been separated.
 
@@ -74,7 +74,7 @@ Every concurrent issue gets a separate git worktree and exclusive ownership of e
 - **The live Rime deployment** (`~/Library/Rime`): one owner for deployment or live-input verification. Eval and baseline work uses a throwaway `rime_dir`; no session redeploys while another is testing the live data.
 - **A quiet machine**: one owner when a ticket's deliverable includes latency or other timing measurements. Builds and unrelated load invalidate that evidence.
 
-Record the allocations in every affected execution prompt. Do not start concurrent work while an ownership edge is unresolved.
+Record a non-default allocation or prohibition in the prompt. Do not start concurrent work while an ownership edge is unresolved.
 
 ### Classify execution autonomy
 
@@ -98,9 +98,21 @@ Difficulty is separate from triage readiness: `ready-for-agent` permits unattend
 7. Freeze the delivery contract and execution prompt. Give the execution session one issue only; require it to claim the issue before writing, implement and verify end to end, open the code PR in the correct repository, and leave both PR and issue open for acceptance.
 8. Write the frozen prompt to `docs/orchestration/execution-prompts/` using the filename convention below, record the repository-relative path and SHA-256 on the issue, and return that path to the owner. The orchestration session does not start an implementation subagent itself.
 
-Every execution prompt must be self-contained. It must designate `Session role: Execution`, name the executor attempt tier, issue title and URL, autonomy class and rationale, source repository and branch base, required context documents, accepted and deferred scope, established seams and remaining executor decisions, shared-state ownership, branch and PR rules, delivery-contract ID and version, supported operating envelope, blocking scenario matrix, accepted-risk register, criteria and expected evidence, independent-review decision and rationale, and the exact handback artifacts. For an easy ticket, instruct the session to follow the specified path and stop for genuine ambiguity. For a hard ticket, authorize local engineering decisions within the acceptance boundary and require those decisions and tradeoffs in the handback.
+Write the frozen prompt as a short brief using the template in
+`docs/orchestration/execution-prompts/README.md`. Pin this file's revision. Copy
+ticket-specific contract text; do not recopy claim, git, or BASE definitions from
+this protocol. Omit unused sections; omission is empty, not an unbounded promise.
+Later issue edits do not alter the frozen file.
 
-A repair prompt must additionally name the current branch and PR, quote the failed contract criterion IDs with primary-artifact references, state the failure classification and remaining attempt, and require the new executor to verify the issue and current artifacts independently. Give an escalated or recovery executor the original contract and current artifacts, not the previous executor's reasoning as assumed fact. A completion summary is only a lead to inspect.
+For an easy ticket, instruct the session to follow the specified path and stop for genuine ambiguity. For a hard ticket, authorize local engineering decisions within the acceptance boundary and require those decisions and tradeoffs in the handback.
+
+A same-contract repair prompt adds a Repair prefix (failed criterion IDs,
+classification, original prompt path and SHA-256, current branch/PR/head) and
+does not rewrite Established or Criteria. Require the new executor to verify the
+issue and current artifacts independently. Give an escalated or recovery executor
+the original contract and current artifacts, not the previous executor's reasoning
+as assumed fact. A new contract version uses a new execution-prompt filename. A
+completion summary is only a lead to inspect.
 
 ### Execution prompt files
 
@@ -117,7 +129,7 @@ Do not paste full prompt text into `AGENTS.md`, this file, ADRs, or issue/PR bod
 2. Record the repository-relative path and SHA-256 on the issue.
 3. Return that path to the owner. The owner starts the execution session from that file.
 
-Prompt bodies are gitignored. The directory README and this section are the committed source of the location. Do not overwrite a file after its hash has been published; a later contract version or repair prompt uses a new filename.
+Prompt bodies are gitignored. The directory README holds the location convention and the prompt template. Do not overwrite a file after its hash has been published; a later contract version or repair prompt uses a new filename.
 
 ### Freeze one delivery contract
 
@@ -127,35 +139,36 @@ The **delivery contract** is the single standard used by the executor's self-che
 Criterion ID -> requirement -> expected evidence
 ```
 
-The contract incorporates the repo-wide baseline and applicable hard constraints as they exist at dispatch, then adds the issue-specific criteria and prompt contract. It uses the stable baseline IDs below and gives a local ID to each applicable hard constraint. Any linked specification, ADR, or issue text that affects acceptance must be quoted into the prompt or pinned to a repository revision and section. No acceptance participant may add or strengthen criteria after seeing the delivery.
+The contract incorporates the repo-wide baseline and applicable hard constraints
+as they exist at the pinned revision of this file, then adds the issue-specific
+criteria. It uses the stable baseline IDs below and gives a local ID to each
+applicable hard constraint. Write a BASE line only to name ticket-specific
+commands or mark an item N/A. Any linked specification, ADR, or issue text that
+affects acceptance must be quoted into the prompt or pinned to a repository
+revision and section. Live issue text after freeze is not acceptance input. No
+acceptance participant may add or strengthen criteria after seeing the delivery.
 
-A contract is finite only when it records all of the following:
+A contract is finite when every ticket-specific requirement has a stable criterion
+ID and expected evidence. Envelope defaults to Established. An omitted scenario
+or risk section is empty, not an implicit "all cases" or hidden register. If a
+risk is accepted, write it. Universal words such as "all", "any", and "never" are
+bounded by Established and any listed scenarios unless they name a stop-ship
+invariant below.
 
-- **Supported operating envelope**: the normal states, supported failure modes, concurrency assumptions, threat model, and resource conditions the delivery promises to handle. Conditions outside that envelope are not silently promoted into acceptance requirements.
-- **Blocking scenario matrix**: the concrete behaviors and fault combinations that must be exercised. Universal words such as "all", "any", and "never" are bounded by the stated envelope and matrix unless they name a stop-ship invariant below.
-- **Accepted-risk register**: each consciously deferred risk gets a stable `RISK-<issue>-<n>` ID, trigger, user-visible impact, containment or recovery, and a follow-up issue or explicit revisit milestone. An empty register is valid; an implicit one is not.
-- **Stop-ship boundary**: the contract names any issue-specific impact that must block even when the exact trigger was not anticipated. The repo-wide minimum boundary is defined below.
+When present, these terms mean:
 
-Do not use `BASE-SAFETY` or a broad specification link as an unbounded "no bugs" criterion. Quote the applicable invariant, state its envelope, and give it a local criterion ID. A test can prove a criterion, but a preference for a stronger test is not itself a criterion.
+- **Envelope**: the normal states, supported failure modes, concurrency assumptions, threat model, and resource conditions. Defaults to Established when omitted.
+- **Blocking scenario**: a concrete fault combination that must be exercised and is not already a criterion.
+- **Accepted risk**: `RISK-<issue>-<n>` with trigger, impact, containment, and revisit.
+- **Stop-ship**: issue-specific impact that must block even when the exact trigger was not anticipated. The repo-wide minimum is below.
+
+Do not use `BASE-SAFETY` or a broad specification link as an unbounded "no bugs" criterion. Quote the applicable invariant into Established or a local criterion ID. A test can prove a criterion, but a preference for a stronger test is not itself a criterion.
 
 The contract may narrow a ticket's new promise, but it cannot silently remove an already documented product capability, failure fallback, trust boundary, or data-integrity guarantee. Changing one requires an explicit owner product or security decision in the contract version; omitting it from the prompt does not move it outside the envelope.
 
-Use this shape in execution prompts:
+Prompt shape: `docs/orchestration/execution-prompts/README.md`.
 
-```text
-Delivery contract: AC-<issue>-v<n>
-Specification snapshot: quoted terms or revision + sections
-Accepted scope / Deferred scope: ...
-Supported operating envelope: ...
-Blocking scenarios: SCN-<issue>-<n> -> behavior or fault combination
-Criteria: Criterion ID -> requirement -> expected evidence
-Accepted risks: RISK-<issue>-<n> -> trigger -> impact -> containment -> revisit
-Additional stop-ship impacts beyond the repo-wide minimum: ... or None
-Independent review: required / not required -> rationale
-Required handback: ...
-```
-
-Acceptance records mirror it with results:
+Acceptance records use this shape:
 
 ```text
 Delivery contract: AC-<issue>-v<n>
@@ -210,7 +223,7 @@ Green light means every criterion in the frozen delivery contract passes. A pass
 - **`BASE-PR`**: A PR-backed delivery's description carries motivation, change summary, and verification evidence.
 - **`BASE-RISK`**: An executor-backed version's handback preserves the frozen accepted-risk register, reports any evidence that changes a listed risk, and does not describe an accepted risk as fixed. For an owner-approved risk-only version, the orchestration acceptance record owns that mapping. New non-stop-ship findings are recorded without failing the current delivery.
 
-Ticket-specific criteria come from the issue and the execution prompt: required behavior, established seams, verification commands, evidence, and handback artifacts. The frozen prompt is the self-contained snapshot; later issue edits do not silently alter it.
+Ticket-specific criteria come from the frozen prompt. Later issue edits do not silently alter it.
 
 ### Acceptance workflow
 
