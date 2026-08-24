@@ -30,6 +30,8 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
   static let notificationIdentifier = "SquirrelNotification"
 
   let rimeAPI: RimeApi_stdbool = rime_get_api_stdbool().pointee
+  // librime calls are illegal after finalize until the next initialize.
+  private var rimeAvailable = false
   var config: SquirrelConfig?
   var panel: SquirrelPanel?
   var enableNotifications = false
@@ -62,14 +64,12 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
 
   func deploy() {
     print("Start maintenance...")
-    self.shutdownRime()
-    self.startRime(fullCheck: true)
-    self.loadSettings()
+    applyGlobalLifecycle(.deploy)
   }
 
   func syncUserData() {
     print("Sync user data")
-    _ = rimeAPI.sync_user_data()
+    applyGlobalLifecycle(.syncUserData)
   }
 
   func openLogFolder() {
@@ -134,6 +134,7 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
   func startRime(fullCheck: Bool) {
     print("Initializing la rime...")
     rimeAPI.initialize(nil)
+    rimeAvailable = true
     if rimeAPI.start_maintenance(fullCheck) {
       _ = rimeAPI.deploy_config_file("squirrel.yaml", "config_version")
     }
@@ -217,8 +218,12 @@ final class SquirrelApplicationDelegate: NSObject, NSApplicationDelegate {
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     print("Squirrel is quitting.")
-    rimeAPI.cleanup_all_sessions()
+    applyGlobalLifecycle(.terminate)
     return .terminateNow
+  }
+
+  func applyGlobalLifecycle(_ operation: GlobalLifecycleOperation) {
+    CompositionFinalization.perform(operation, on: self)
   }
 
 }
@@ -366,12 +371,14 @@ private extension SquirrelApplicationDelegate {
 
   func shutdownRime() {
     config?.close()
+    guard rimeAvailable else { return }
     rimeAPI.finalize()
+    rimeAvailable = false
   }
 
   func workspaceWillPowerOff(_: Notification) {
     print("Finalizing before logging out.")
-    self.shutdownRime()
+    applyGlobalLifecycle(.powerOff)
   }
 
   func rimeNeedsReload(_: Notification) {
@@ -407,6 +414,40 @@ private extension SquirrelApplicationDelegate {
       } catch {
         print("Error creating user data directory: \(path.path())")
       }
+    }
+  }
+}
+
+extension SquirrelApplicationDelegate: CompositionFinalizationHost {
+  func currentCompositionState() -> CompositionFinalizationState {
+    panel?.inputController?.compositionFinalizationState(rimeAvailable: rimeAvailable)
+      ?? .inactive(rimeAvailable: rimeAvailable)
+  }
+
+  func applyCompositionFinalization(_ plan: CompositionFinalizationPlan) {
+    if let controller = panel?.inputController {
+      controller.applyCompositionFinalization(plan)
+      return
+    }
+    if plan.hidePanel {
+      panel?.hide()
+    }
+  }
+
+  func applyBackendFollowUp(_ followUp: BackendFollowUp) {
+    switch followUp {
+    case .none:
+      break
+    case .shutdownAndReinitialize:
+      shutdownRime()
+      startRime(fullCheck: true)
+      loadSettings()
+    case .syncUserData:
+      _ = rimeAPI.sync_user_data()
+    case .cleanupAllSessions:
+      rimeAPI.cleanup_all_sessions()
+    case .shutdown:
+      shutdownRime()
     }
   }
 }
