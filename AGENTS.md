@@ -39,7 +39,7 @@ Load detailed guidance only when the task triggers it:
 | Triage or tracker labels | `docs/agents/triage-labels.md` |
 | Build, dependency, plugin installation, packaging, manifests, or CI validation | `docs/agents/build.md` |
 | Swift/IMK frontend, lifecycle, key handling, candidate UI, or manual validation | `SKILL.md` |
-| Candidate ranking, semantic memory, LM integration, or plugin/frontend boundaries | `docs/agents/domain.md`, then the relevant parts of `CONTEXT.md` and `docs/adr/` |
+| Candidate ranking, semantic memory, LM integration, or plugin/frontend boundaries | `docs/agents/domain.md`, then the relevant parts of `CONTEXT.md`, `docs/adr/`, and `docs/reranker-public-contract.md` |
 | `data/luna_pinyin.custom.yaml` | Read that file's constraint header before editing; it is the deployment truth source |
 
 Do not preload every linked document. Follow the row that matches the work and any further required-reading instructions it contains.

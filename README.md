@@ -14,8 +14,8 @@
 - 上游 Squirrel / Rime 的全部功能：拼音输入、方案切换、用户词典、同步、主题定制等
 - LLM 候选词重排序：
   - 完全本地推理（Qwen3-0.6B-Base，MLX），输入内容不出本机
-  - 独立推理进程（daemon），Unix socket 通信，不阻塞输入事件处理（[ADR-0001](docs/adr/0001-inference-process-boundary.md)）
-  - 窗口化、无状态、按请求打分，只以上文最近 64 个字符为条件（[ADR-0002](docs/adr/0002-windowed-stateless-scoring.md)）
+  - 独立推理进程（daemon），Unix socket **同步有界交换**（默认 200 ms），超时或故障则整窗原序透传（[ADR-0001](docs/adr/0001-inference-process-boundary.md)，[公共合同](docs/reranker-public-contract.md)）
+  - 窗口化、无状态、按请求打分：上文条件是 daemon 的 `--context-window`（默认 64 字符），与方案里的 `window`（候选条数，默认 32）不是同一项（[ADR-0002](docs/adr/0002-windowed-stateless-scoring.md)）
   - 任何打分故障都整窗原序透传，不改变候选集合、不阻塞文本提交
   - 与 librime-octagram、librime-lua 等既有插件共存
 - 当前范围：仅简体中文输入方案（以 `luna_pinyin` 为开发基准）
@@ -32,30 +32,33 @@
 ## 使用
 
 - 在系统输入法列表中选择「鼠鬚管」，通过 `Ctrl+`` `（或 `F4`）呼出方案菜单、切换输入方式
-- LLM 重排序通过输入方案的 `llm_rerank` 过滤器配置（启用后候选排序发生变化）：
+- LLM 重排序通过输入方案的 `llm_rerank` 过滤器配置。下列键值与已发布插件 `v1.0.2` 的默认值一致；省略 `socket_path` 时才会用 `$HOME/.../llm-rerank.sock`，显式值按字面使用（`~` 不会展开）。完整协议与阻塞语义见 [公共合同](docs/reranker-public-contract.md)。
 
 ```yaml
 engine:
   filters:
     - llm_rerank
 llm_rerank:
-  enable: true
-  window: 32                              # 上文窗口字符数
-  alpha: 2.0                              # 语言模型分权重
-  sys_coeff: 1.0                          # 系统词典权重
-  usr_coeff: 1.0                          # 用户词典权重
-  gamma: 2.0                              # 个性化证据权重
-  saturate_k: 3.0                         # 证据饱和参数
-  socket_path: ~/Library/Application Support/Squirrel/llm-rerank.sock
+  reranking_enabled: true
+  recording_enabled: false
+  evidence_enabled: false
+  window: 32
+  alpha: 0.0
+  sys_coeff: 1.0
+  usr_coeff: 1.0
+  gamma: 2.0
+  saturate_k: 3.0
+  deadline_ms: 200
+  baseline_policy_id: mean-token-lm-v1
 ```
 
-以上为默认值示例;其他可调项（`verbose` 等）见插件源码。
+`alpha` 默认 `0.0`，语言模型项关闭；要联系 daemon 必须设为正值。其他可调项（`verbose`、`socket_path`）见公共合同。
 
 ## 工作原理
 
 - 候选列表由 librime 生成并完成基础排序，本仓库的 Swift 前端只负责渲染与翻页，不重排候选（[CONTEXT.md](CONTEXT.md)）
 - 重排发生在 librime 插件层（[librime-llm-rerank](https://github.com/Habit130/librime-llm-rerank)）：在候选产出后、呈现前，以本次会话上文为条件重新调整同一重排组内候选的发射顺序
-- 设计规格见 [issue #16](https://github.com/Habit130/squirrel/issues/16)；架构决策见 [docs/adr/](docs/adr/)
+- 设计规格见 [issue #16](https://github.com/Habit130/squirrel/issues/16)；架构决策见 [docs/adr/](docs/adr/)；已发布配置与协议见 [公共合同](docs/reranker-public-contract.md)
 
 ## Roadmap
 

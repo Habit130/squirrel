@@ -64,7 +64,9 @@
 #       evidence_enabled: false
 #
 # (With reranking_enabled: true the filter additionally contacts the daemon
-# to score the window; false keeps recording without any daemon dependency.)
+# to score the window; false keeps recording without any daemon dependency.
+# Scoring keys, socket expansion, and the wire contract:
+# docs/reranker-public-contract.md, pinned plugin v1.0.2.)
 #
 patch:
   engine/processors:

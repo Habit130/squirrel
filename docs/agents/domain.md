@@ -4,7 +4,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Load only the relevant context
 
-- For candidate ranking, semantic memory, or LM integration, read **`CONTEXT.md`** and the relevant decisions under **`docs/adr/`**.
+- For candidate ranking, semantic memory, or LM integration, read **`CONTEXT.md`**, the relevant decisions under **`docs/adr/`**, and **`docs/reranker-public-contract.md`** for released schema keys, protocol identity fields, and blocking semantics.
 - For Swift/IMK frontend behavior, read **`SKILL.md`**. Load ranking context only when the frontend change crosses that boundary.
 - For work spanning both areas, read all applicable sources and preserve each area's vocabulary and ownership boundary.
 
@@ -17,6 +17,7 @@ This repo is **single-context**:
 ```
 /
 ├── CONTEXT.md
+├── docs/reranker-public-contract.md
 └── docs/adr/
     ├── 0001-inference-process-boundary.md
     ├── 0002-windowed-stateless-scoring.md

@@ -2,6 +2,8 @@
 
 Status: accepted (2026-07-31, issue #4)
 
+The daemon process-boundary decision remains in force. Released schema keys, socket expansion, scoring protocol identity fields, and the synchronous deadline are documented in [docs/reranker-public-contract.md](../reranker-public-contract.md) against plugin `v1.0.2`. The request/response shapes in "Communication" below are the original phase-1 sketch; they omit later identity fields. The filter still performs a synchronous bounded exchange (default 200 ms) and then whole-window passthrough; "Typing is never blocked" means that deadline plus fallback, not an asynchronous path.
+
 ## Context
 
 The candidate reranking plugin needs Qwen3-0.6B-Base inference to score candidates. #3 measured the latency budget on Apple M5 / 24 GB:
