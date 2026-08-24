@@ -20,6 +20,9 @@ jobs:
       - name: Lint
         run: swiftlint
 
+      - name: Check package integrity
+        run: bash package/check_package_integrity
+
       - name: Configure build environment
         run: |
           echo git_ref_name="$(git describe --always)" >> $GITHUB_ENV

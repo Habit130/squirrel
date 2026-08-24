@@ -79,8 +79,9 @@ Common targets:
 
 - `make` / `make release`: release app build
 - `make debug`: debug app build
-- `make package`: installer package; signing/notarization uses `DEV_ID`
-- `make archive`: package plus Sparkle `sign_update` and the distributable archive
+- `make package`: installer package; always rebuilt from the current release app. Signing/notarization uses `DEV_ID`
+- `make archive`: package plus Sparkle `sign_update` and the distributable archive. A missing or failed `sign_update` is fatal; the versioned archive and appcast are not left as a successful release
+- `make check-package-integrity`: packaging fail-closed checks (stale package rebuild, signer failure, complete unsigned archive)
 - `make install` / `make install-debug` / `make install-release`: install into `/Library/Input Methods`
 - `make clean` / `make clean-deps` / `make clean-package`: remove the corresponding generated artifacts
 
@@ -95,4 +96,4 @@ Use `SKILL.md` for the behavior-specific manual validation checklist. For live t
 
 For librime source changes, use `make -C librime test` or `make -C librime test-debug` as required by the ticket. A separately delivered plugin follows its own repository's test rules in addition to the Squirrel integration path specified by the execution prompt.
 
-CI uses macOS 26 with Xcode 26.5. Commit and pull-request workflows run SwiftLint, `./action-build.sh package`, and Periphery; the release workflow substitutes `./action-build.sh archive` so it also builds Sparkle's `sign_update` tool and the release archive.
+CI uses macOS 26 with Xcode 26.5. Commit and pull-request workflows run SwiftLint, `package/check_package_integrity`, `./action-build.sh package`, and Periphery; the release workflow substitutes `./action-build.sh archive` so it also builds Sparkle's `sign_update` tool and the release archive.
