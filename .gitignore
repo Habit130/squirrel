@@ -22,3 +22,11 @@ package/*.xml
 /installation.yaml
 docs/orchestration/execution-prompts/*
 !docs/orchestration/execution-prompts/README.md
+
+# Machine-specific agent context.
+.local/*
+!.local/README.md
+
+# Frozen owner-machine session handoffs.
+docs/orchestration/handoffs/*.md
+!docs/orchestration/handoffs/README.md

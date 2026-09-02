@@ -1,6 +1,8 @@
 # AGENTS.md
 
-The machine-global `~/.config/opencode/AGENTS.md` applies. This file contains only Squirrel-specific boundaries, role overrides, and context routing. `CLAUDE.md` points here.
+Local OpenCode sessions inherit `~/.config/opencode/AGENTS.md`. This file contains only
+Squirrel-specific boundaries, workflow rules, review invariants, and context routing.
+`CLAUDE.md` points here.
 
 ## Repository boundary
 
@@ -10,40 +12,52 @@ The machine-global `~/.config/opencode/AGENTS.md` applies. This file contains on
 
 ## Session roles
 
-Squirrel issue delivery overrides the global single-Agent division of work. A writing session must have one of these roles in its initiating prompt:
-
-- **Orchestration (main) session**: maintains an owner-confirmed scope and may write only orchestration artifacts: issues and tracker state, specifications, ADRs, roadmaps, Agent guidance, execution prompts, handback records, and acceptance records. It never implements or repairs a dispatched product-code issue.
-- **Execution session**: is started by the owner from a frozen execution prompt, handles one issue, and is the only active writer for that issue's branch and PR. Frozen prompts live at `docs/orchestration/execution-prompts/`; the issue records the filename and SHA-256.
-
-An acceptance subagent is an optional read-only helper of the orchestration session, not a third delivery role. The orchestration session decides before dispatch whether to use one, records the reason, and remains the final decision-maker. Review depth may increase; the frozen acceptance standard may not.
-
-If a writing task's role is unclear, resolve the role with the owner before editing. Read `docs/agents/issue-tracker.md` for the complete dispatch, frozen-contract, handback, acceptance, and escalation protocol.
+- Every writing session declares one role in its initiating prompt: **Orchestration**, **Execution**, or **Acceptance**.
+- **Orchestration** owns an explicit issue scope and may write only governance artifacts. It freezes contracts and handoffs; it does not implement or repair product code.
+- **Execution** owns one issue, branch/worktree, delivery surface, and active writer. It implements and self-verifies the frozen issue contract, then returns a criterion/evidence matrix.
+- **Acceptance** is conditionally required and independently checks the same frozen contract. It writes acceptance records only and never fixes the delivery.
+- habit starts Execution and Acceptance and is the sole squash-merge authority. See `docs/agents/delivery.md` for dispatch, Codex, handoff, acceptance, and repair protocol.
 
 ## Git remotes and workflow
 
 - `origin` = `https://github.com/Habit130/squirrel`, the only write remote and PR target.
 - `upstream` = `https://github.com/rime/squirrel`, read-only reference. Never push or open a PR against it; do not routinely merge or rebase it into this intentionally divergent fork.
-- The protected default branch is `master`. Fetch `origin`, then create feature branches from `origin/master`; local `master` tracks `origin/master`, never `upstream/master`.
-- All changes use feature branches and PRs. The owner squash-merges on GitHub; no auto-merge or force-push. Automatic head-branch deletion stays disabled because stacked PRs are used.
-- If the current branch holds a complete work unit without an open PR, open that PR before stacking new work on it. Branch from `origin/master` only after the prior work is merged.
-- Follow the global branch prefixes and English Conventional Commits.
+- The protected default branch is `master`. Fetch `origin`, then create feature branches from `origin/master` using `<type>/<kebab-slug>`; local `master` tracks `origin/master`, never `upstream/master`.
+- Do not use stacked PRs. Parallel issues use separate worktrees.
+- Every post-bootstrap change has a frozen issue contract and is delivered through one feature branch and one PR.
+- Use English Conventional Commits. PR descriptions contain Motivation, Changes, and Verification.
+- Agents may branch, commit, push, and create/update PRs. They leave the PR open and do not merge, enable auto-merge, or rewrite remote history.
+- habit squash-merges. GitHub deletes the merged head branch. Completion is recorded only after the result is verified on `origin/master`.
 - Before any `gh` write, run `gh repo set-default --view`; it must report `Habit130/squirrel`. See `docs/agents/issue-tracker.md`.
 
-## Context router
+## Code Review Rules
+
+- Report a finding only when the delivery introduces a concrete P0/P1 in a supported path. State the trigger, impact, primary evidence, and safe path or exception. Treat style, optional refactors, and stronger-than-contract tests as non-blocking follow-up.
+- Flag a change that can lose, corrupt, duplicate, or fail to commit user text, or leave composition or marked text stranded with no documented fallback. Safe path: follow `SKILL.md` commit, marked-text, and deactivation rules.
+- Flag candidate generation, scoring, or reranking in `sources/`. Safe path: implement ranking in `Habit130/librime-llm-rerank`; Squirrel may only render the already-ranked list and apply reserved-property UI hints.
+
+## Agent skills
 
 Load detailed guidance only when the task triggers it:
 
 | Task | Required context |
 | --- | --- |
-| Issue shaping, dispatch, handback, acceptance, escalation, or parallel execution | `docs/agents/issue-tracker.md` |
+| Issue tracker operations | `docs/agents/issue-tracker.md` |
 | Triage or tracker labels | `docs/agents/triage-labels.md` |
+| Planning, dispatch, handback, Acceptance, repair, or parallel delivery | `docs/agents/delivery.md` |
 | Build, dependency, plugin installation, packaging, manifests, or CI validation | `docs/agents/build.md` |
+| Domain terms, boundaries, or architectural decisions | `docs/agents/domain.md`, then relevant `CONTEXT.md`, `docs/adr/`, and `docs/reranker-public-contract.md` |
 | Swift/IMK frontend, lifecycle, key handling, candidate UI, or manual validation | `SKILL.md` |
-| Candidate ranking, semantic memory, LM integration, or plugin/frontend boundaries | `docs/agents/domain.md`, then the relevant parts of `CONTEXT.md`, `docs/adr/`, and `docs/reranker-public-contract.md` |
 | `data/luna_pinyin.custom.yaml` | Read that file's constraint header before editing; it is the deployment truth source |
 
-Do not preload every linked document. Follow the row that matches the work and any further required-reading instructions it contains.
+Follow only the rows relevant to the current task and any further pointers they contain.
 
 ## Shared-state gate
 
-Before parallel dispatch, the orchestration session must allocate separate worktrees and exclusive ownership of every applicable machine-level resource documented in `docs/agents/issue-tracker.md`. Do not run concurrent work until those allocations are explicit.
+Parallel Execution uses a separate worktree per issue. Before dispatch, Orchestration allocates exclusive ownership of every applicable machine-level shared resource:
+
+- **librime build tree** (`librime/build/`, `librime/plugins/`, `lib/`, `bin/`): one owner for `install-plugins.sh` or `make librime`. A consumer that only needs a built binary copies it out first.
+- **live Rime deployment** (`~/Library/Rime`): one owner for deployment or live-input verification. Eval and baseline work uses a throwaway `rime_dir`.
+- **quiet machine**: one owner when the deliverable includes latency or timing measurements.
+
+Do not start concurrent work while an ownership edge is unresolved. Instance paths live in `.local/agent-context.md`.
