@@ -64,6 +64,7 @@ llm_rerank:
 
 - **第一阶段（进行中）**：通用 LLM 候选重排——已完成插件与打包（[#26](https://github.com/Habit130/squirrel/pull/26)），后续完善体验验收与配置收敛
 - **第二阶段（规划中）**：语义个性化候选重排——以本地语义记忆复用用户的历史选择：保存可重放的选择事件，在语义相近而非字面相同的上文下复用既往偏好，同时严格区分零检索证据与真故障，任何故障都沿用整次原序透传。规格见 [issue #43](https://github.com/Habit130/squirrel/issues/43)
+- **个人实验路径（未启用）**：[ADR-0004](docs/adr/0004-personal-experimental-first-use.md) 仅放宽 #43 / ADR-0003 的首次启用效能与生产锁门槛；版本化配置见 [personal-bge-experiment-v1](docs/personal-experiment-profile.md)。当前发布示例仍为 `evidence_enabled: false`。habit 未明确激活前不得当作线上证据。
 
 ## 关联仓库
 
