@@ -1,0 +1,11 @@
+{
+  "note": "Invented diagnostic fixtures. Not private history.",
+  "short_pinyin": "nihao",
+  "short_expected_commit": "你好",
+  "long_pinyin": "xianzaiyouyigehenduode",
+  "seed_preceding": "周末想去那座",
+  "seed_current_preceding": "计划搬去那座",
+  "seed_segment": "chengshi",
+  "seed_selected": "城市",
+  "seed_competitor": "成事"
+}
