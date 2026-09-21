@@ -15,6 +15,10 @@ fail-closed rules; [ADR-0001](0001-inference-process-boundary.md);
 no-qualified-configuration outcome; or the parked #81–#84 production
 confirmation chain.
 
+Amended by: [ADR-0005](0005-personal-lora-live-reranking.md), only for the
+later personal Qwen3-0.6B-Base + LoRA live-reranking path. The BGE and
+`alpha=0` personal-experiment decision recorded here is unchanged.
+
 ## Context
 
 ADR-0003 deferred live retrieval evidence until a candidate-conditioned
