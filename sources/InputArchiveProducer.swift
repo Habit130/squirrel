@@ -510,6 +510,11 @@ enum InputArchiveSocket {
       return nil
     }
     _ = fcntl(fd, F_SETFL, flags)
+    var noSignalPipe: Int32 = 1
+    if setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSignalPipe, socklen_t(MemoryLayout<Int32>.size)) != 0 {
+      close(fd)
+      return nil
+    }
     var timeout = timeval(tv_sec: 1, tv_usec: 0)
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))

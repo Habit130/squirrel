@@ -177,6 +177,9 @@ sort: original
 号\thao
 豪\thao
 你好\tnihao
+甲正\tjiazheng
+甲斥\tjiachi
+甲敏\tjiamin
 """
     other = """schema:
   schema_id: other_schema
@@ -208,7 +211,7 @@ translator:
     write_private(os.path.join(shared, "luna_pinyin.schema.yaml"), schema)
     write_private(os.path.join(shared, "luna_pinyin.dict.yaml"), dictionary)
     write_private(os.path.join(shared, "other_schema.schema.yaml"), other)
-    write_private(os.path.join(shared, "other_schema.dict.yaml"), "---\nname: other_schema\nversion: \"1\"\nsort: original\n...\n测\tce\n")
+    write_private(os.path.join(shared, "other_schema.dict.yaml"), "---\nname: other_schema\nversion: \"1\"\nsort: original\n...\n测\tce\n甲斥\tjiachi\n")
     write_private(
         os.path.join(user, "squirrel.yaml"),
         "config_version: \"1\"\ninput_archive:\n  socket: \"%s\"\nstyle:\n  inline_preedit: true\n" % socket,
@@ -314,8 +317,122 @@ def run_probes(probes_dir):
     return results
 
 
+def query_payloads(backend, socket):
+    code, body, err = cli(backend, socket, "query", "timeline", "--page-size", "50")
+    if code != 0:
+        return code, [], err
+    rows = (body.get("body") or {}).get("observations") or []
+    processes = sorted({row.get("process_id") for row in rows if row.get("process_id")})
+    detailed = []
+    for process_id in processes:
+        code, page, err = cli(
+            backend, socket, "query", "process", "--process-id", process_id,
+            "--private-detail", "--page-size", "50",
+        )
+        if code != 0:
+            return code, detailed, err
+        detailed.extend((page.get("body") or {}).get("observations") or [])
+    return 0, detailed, ""
+
+
+def payload_text(row):
+    payload = row.get("payload")
+    if isinstance(payload, dict):
+        return str(payload.get("text") or "")
+    return ""
+
+
+def sigpipe_controls(binary, scratch):
+    import socket as pysock
+    results = {}
+    missing = os.path.join(scratch, "missing.sock")
+    report = os.path.join(scratch, "sig-missing.json")
+    code, _, err, _ = harness(binary, scratch, scratch, scratch, missing, "socket-call", report)
+    results["connect_failure"] = code == 0 and "collector_unavailable" in err
+
+    def peer_close(name, scenario, large=True):
+        path = os.path.join(scratch, name)
+        if os.path.exists(path):
+            os.unlink(path)
+        server = pysock.socket(pysock.AF_UNIX, pysock.SOCK_STREAM)
+        server.bind(path)
+        os.chmod(path, 0o600)
+        server.listen(1)
+        server.settimeout(5)
+        proc = subprocess.Popen(
+            [binary, "--shared", scratch, "--user", scratch, "--log", scratch, "--socket", path, "--scenario", scenario, "--report", os.path.join(scratch, scenario + ".json")],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            conn, _ = server.accept()
+            if large:
+                try:
+                    conn.recv(1)
+                except OSError:
+                    pass
+            conn.close()
+        except OSError:
+            pass
+        finally:
+            server.close()
+        try:
+            out, err = proc.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, err = proc.communicate()
+        return proc.returncode, out, err
+
+    code, _, err = peer_close("close.sock", "socket-call")
+    results["accept_close"] = code == 0 and code != -13 and "socket_call=collector_unavailable" in err
+    code, _, err = peer_close("sender.sock", "sender-call", large=False)
+    results["sender_close"] = code == 0 and "sender_call=survived" in err
+    path = os.path.join(scratch, "ok.sock")
+    if os.path.exists(path):
+        os.unlink(path)
+    server = pysock.socket(pysock.AF_UNIX, pysock.SOCK_STREAM)
+    server.bind(path)
+    os.chmod(path, 0o600)
+    server.listen(1)
+    server.settimeout(5)
+    proc = subprocess.Popen(
+        [binary, "--shared", scratch, "--user", scratch, "--log", scratch, "--socket", path, "--scenario", "socket-call", "--report", os.path.join(scratch, "ok.json")],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        conn, _ = server.accept()
+        while True:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            if len(chunk) < 65536:
+                break
+        reply = json.dumps({
+            "interface_version": "input-archive-v1",
+            "envelope_version": 1,
+            "op": "admit_batch",
+            "ok": False,
+            "error": {"code": "invalid_request", "message": "content-free", "retryable": False, "content_included": False},
+            "content_included": False,
+        }).encode()
+        conn.sendall(len(reply).to_bytes(4, "big") + reply)
+        conn.close()
+    except OSError:
+        pass
+    finally:
+        server.close()
+    try:
+        _, err = proc.communicate(timeout=8)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        _, err = proc.communicate()
+    results["normal_exchange"] = proc.returncode == 0 and "socket_call=" in err
+    return results
+
+
 def contract(args):
-    scratch = os.path.join(args.scratch, "contract")
+    scratch = os.path.join(args.scratch, "contract-%d" % int(time.time()))
     shared = os.path.join(scratch, "shared")
     user = os.path.join(scratch, "user")
     log = os.path.join(scratch, "log")
@@ -348,6 +465,20 @@ def contract(args):
         query_code, timeline, _ = cli(args.backend, socket, "query", "timeline", "--page-size", "50")
         observations = ((timeline.get("body") or {}).get("observations") or [])
         kinds = {row.get("observation_kind") for row in observations}
+        gate_report = os.path.join(args.root, "schema-gate.json")
+        gate_code, _, gate_err, _ = harness(binary, shared, user, log, socket, "schema-gate", gate_report)
+        cli(args.backend, socket, "checkpoint")
+        payload_code, rows, _ = query_payloads(args.backend, socket)
+        texts = [payload_text(row) for row in rows]
+        joined = "\n".join(texts)
+        schema_gate = {
+            "client_ok": gate_code == 0,
+            "luna_stored": any(row.get("schema_id") == "luna_pinyin" and "甲正" in payload_text(row) for row in rows),
+            "excluded_commit_absent": "甲斥" not in joined,
+            "excluded_raw_absent": "jryuan" not in joined,
+            "sensitive_absent": "甲敏" not in joined,
+        }
+        sig = sigpipe_controls(binary, args.scratch)
         evidence = {
             "short_long_typing": "commit_attempt" in kinds and "input_change" in kinds,
             "backspace_retype": "replacement" in kinds,
@@ -355,9 +486,9 @@ def contract(args):
             "cancellation_raw_deactivation": "cancellation" in kinds and "raw_finalization" in kinds,
             "retarget_unavailable_command": code == 0 or body.get("failure_count") == 0,
             "capture_off_on_text": body.get("failure_count", 1) == 0,
-            "eligibility_exclusion": "exclusion_notice" in kinds or body.get("failure_count") == 0,
+            "eligibility_exclusion": all(schema_gate.values()),
             "provenance_continuity": len({row.get("process_id") for row in observations}) > 1,
-            "fault_nonblocking": True,
+            "fault_nonblocking": all(sig.values()),
             "policy_pause_restart": (status.get("body") or {}).get("legacy_switch_changed") is False,
             "five_probes": all(value == "pass" for value in probes.values()),
             "no_cwd_or_stdout_leak": body.get("cwd_unchanged") is True and not leaked,
@@ -367,16 +498,18 @@ def contract(args):
         stop_collector(args.backend, root, socket)
         absent_report = os.path.join(args.root, "harness-absent.json")
         absent_code, _, _, _ = harness(binary, shared, user, log, socket, "absent", absent_report)
-        evidence["fault_nonblocking"] = absent_code == 0
+        evidence["fault_nonblocking"] = absent_code == 0 and all(sig.values())
         start_collector(args.backend, root, socket)
         _, restarted, _ = cli(args.backend, socket, "status")
         evidence["policy_pause_restart"] = (restarted.get("body") or {}).get("desired_policy") == "paused"
-        passed = all(evidence.values()) and body.get("failure_count", 1) == 0 and status_code == 0 and query_code == 0
+        passed = all(evidence.values()) and body.get("failure_count", 1) == 0 and status_code == 0 and query_code == 0 and payload_code == 0
         public = {
             "interface_version": INTERFACE,
             "passed": passed,
             "evidence": evidence,
             "probes": probes,
+            "schema_gate": schema_gate,
+            "sigpipe": sig,
             "failure_count": body.get("failure_count", 1),
             "observation_kinds": sorted(kinds),
             "content_included": False,
@@ -410,7 +543,7 @@ def timing(args):
     if sha256(binary) != plan.get("harness_sha256"):
         sys.stderr.write("code=invalid_request artifact_mismatch\n")
         return 1
-    scratch = os.path.join(args.scratch, "timing")
+    scratch = os.path.join(args.scratch, "timing-%d" % int(time.time()))
     root = os.path.join(scratch, "r")
     socket = os.path.join(root, "s")
     shared = os.path.join(scratch, "shared")
@@ -445,7 +578,10 @@ def timing(args):
                 "negative_count": sum(1 for value in deltas if value < 0),
             }
             summary[stratum] = item
-            if threshold_failed(deltas) or (stratum in {"short", "long", "backspace", "retype", "number", "space"} and threshold_failed(primary)):
+            unavailable = sum(1 for row in rows if row["stratum"] == stratum and not row.get("primary_available"))
+            item["primary_unavailable"] = unavailable
+            keyboard = stratum in {"short", "long", "backspace", "retype", "number", "space"}
+            if threshold_failed(deltas) or (keyboard and (unavailable or threshold_failed(primary))):
                 failed = True
         public = {"procedure": "MEAS-189-v1", "passed": not failed, "strata": summary, "content_included": False, "loadavg": load}
         write_private(args.report, json.dumps(public, indent=2, sort_keys=True) + "\n")

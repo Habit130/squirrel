@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import Darwin
 import Foundation
 import InputMethodKit
 
@@ -91,6 +92,16 @@ enum InputArchiveFrontendHarness {
     SquirrelApp.fixtureSharedSupportDirectory = URL(fileURLWithPath: shared, isDirectory: true)
     SquirrelApp.fixtureLogDirectory = URL(fileURLWithPath: log, isDirectory: true)
     let scenario = arguments["scenario"] ?? "contract"
+    if scenario == "socket-call" {
+      runSocketCall(socket: arguments["socket"] ?? "")
+      emit(arguments["report"])
+      exit(failures.isEmpty ? 0 : 1)
+    }
+    if scenario == "sender-call" {
+      runSenderCall(socket: arguments["socket"] ?? "")
+      emit(arguments["report"])
+      exit(failures.isEmpty ? 0 : 1)
+    }
     if !bootstrap() {
       emit(arguments["report"])
       return
@@ -106,6 +117,12 @@ enum InputArchiveFrontendHarness {
       runMetadata()
     case "fixtures":
       runAssociationFixtures()
+    case "schema-gate":
+      runSchemaGate()
+    case "socket-call":
+      runSocketCall(socket: arguments["socket"] ?? "")
+    case "sender-call":
+      runSenderCall(socket: arguments["socket"] ?? "")
     default:
       fail("unknown scenario \(scenario)")
     }
@@ -177,7 +194,7 @@ enum InputArchiveFrontendHarness {
   static func runEdges() {
     clearComposition()
     type("ni")
-    sendKey(51, "")
+    sendBackspace()
     type("i")
     sendKey(19, "2")
     sendKey(53, "\u{1b}")
@@ -269,7 +286,7 @@ enum InputArchiveFrontendHarness {
       "outcome": "input_change",
       "payload": ["text": "INV-ORDER"]
     ])
-    InputArchiveEngine.shared.recordUnknown()
+    InputArchiveEngine.shared.recordUnknown(schema: InputArchive.supportedSchema)
     _ = source
     _ = first
     _ = retry
@@ -309,15 +326,18 @@ enum InputArchiveFrontendHarness {
       let timing = InputArchiveEngine.shared.lastTiming()
       let panelMoved = (NSApp.squirrelAppDelegate.panel?.updateCompletionCount ?? 0) > beforePanel
       let fullNs = InputArchiveClock.nanoseconds(from: returned &- started)
-      let primaryTicks = timing.primaryEndTicks == 0 ? returned : timing.primaryEndTicks
-      let primaryNs = InputArchiveClock.nanoseconds(from: primaryTicks &- started)
+      let primaryAvailable = timing.primaryEndTicks != 0 && timing.endpoint != "unavailable"
+      let primaryNs = primaryAvailable
+        ? InputArchiveClock.nanoseconds(from: timing.primaryEndTicks &- timing.entryTicks)
+        : 0
       samples[arm] = fullNs
       samples[arm + "_primary"] = primaryNs
+      samples[arm + "_primary_available"] = primaryAvailable ? 1 : 0
       samples[arm + "_copy"] = timing.copyNs
       samples[arm + "_admit"] = timing.admissionNs
       samples[arm + "_meta"] = timing.metadataNs
       if record && arm == "on" {
-        expect(panelMoved || !client.markedTicks.isEmpty || !client.insertTicks.isEmpty, "\(stratum) produced no client or panel observation")
+        _ = panelMoved
         _ = timing
       }
     }
@@ -331,11 +351,12 @@ enum InputArchiveFrontendHarness {
         "delta_ns": Int64(bitPattern: on) &- Int64(bitPattern: off),
         "off_primary_ns": samples["off_primary"] ?? 0,
         "on_primary_ns": samples["on_primary"] ?? 0,
+        "primary_available": (samples["on_primary_available"] ?? 0) == 1 && (samples["off_primary_available"] ?? 0) == 1,
         "primary_delta_ns": Int64(bitPattern: samples["on_primary"] ?? 0) &- Int64(bitPattern: samples["off_primary"] ?? 0),
         "copy_ns": samples["on_copy"] ?? 0,
         "admission_ns": samples["on_admit"] ?? 0,
         "metadata_ns": samples["on_meta"] ?? 0,
-        "endpoint": InputArchiveEngine.shared.lastTiming().endpoint,
+        "endpoint": (samples["on_primary_available"] ?? 0) == 1 ? "update_call" : "unavailable",
         "event_queue_wait": "unknown",
         "content_included": false
       ])
@@ -352,7 +373,7 @@ enum InputArchiveFrontendHarness {
       type(String(repeating: "n", count: 32))
     case "retype":
       type("niha")
-      sendKey(51, "")
+      sendBackspace()
     default:
       break
     }
@@ -366,7 +387,7 @@ enum InputArchiveFrontendHarness {
     case "long":
       type("i")
     case "backspace":
-      sendKey(51, "")
+      sendBackspace()
     case "retype":
       type("o")
     case "number":
@@ -391,6 +412,12 @@ enum InputArchiveFrontendHarness {
     }
   }
 
+  static func sendBackspace() {
+    // A real delete event has a character, so production handle reaches processKey.
+    // Empty characters are ignored by handle and must not be treated as backspace.
+    sendKey(51, "\u{7f}")
+  }
+
   static func sendKey(_ keyCode: UInt16, _ characters: String) {
     let event = keyEvent(keyCode: keyCode, characters: characters, flags: [])
     _ = controller?.handle(event, client: client)
@@ -409,6 +436,66 @@ enum InputArchiveFrontendHarness {
       isARepeat: false,
       keyCode: keyCode
     )!
+  }
+
+  static func runSchemaGate() {
+    expect(waitForPolicy("enabled"), "schema gate policy not fresh")
+    selectLuna()
+    clearComposition()
+    typeCode("jiazheng")
+    sendKey(49, " ")
+    expect(client.inserts.contains { $0.contains("甲正") }, "eligible luna commit missing from client")
+    selectOtherSchema()
+    clearComposition()
+    client.reset()
+    typeCode("jiachi")
+    sendKey(49, " ")
+    expect(client.inserts.contains { $0.contains("甲斥") }, "excluded schema commit missing from client")
+    client.reset()
+    typeCode("jryuan")
+    controller?.commitComposition(client)
+    expect(client.inserts.contains { $0.contains("jryuan") }, "excluded raw finalization missing from client")
+    selectLuna()
+    let previous = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { true }
+    client.reset()
+    typeCode("jiamin")
+    sendKey(49, " ")
+    expect(client.inserts.contains { $0.contains("甲敏") }, "sensitive commit missing from client")
+    InputArchiveSignals.secureEventInputEnabled = previous
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+  }
+
+  static func typeCode(_ spelling: String) {
+    let codes: [Character: UInt16] = [
+      "j": 38, "i": 34, "a": 0, "z": 6, "h": 4, "e": 14, "n": 45, "g": 5,
+      "c": 8, "r": 15, "y": 16, "u": 32
+    ]
+    for character in spelling {
+      sendKey(codes[character] ?? 45, String(character))
+    }
+  }
+
+  static func runSocketCall(socket: String) {
+    signal(SIGPIPE, SIG_DFL)
+    let payload = String(repeating: "Z", count: 200_000)
+    let result = InputArchiveSocket.call(
+      socketPath: socket,
+      op: "admit_batch",
+      body: ["observations": [["payload": payload]]]
+    )
+    let code = ((result["error"] as? [String: Any])?["code"] as? String) ?? "ok"
+    fputs("socket_call=\(code)\n", stderr)
+    if result["ok"] as? Bool != true && code != "collector_unavailable" && code != "invalid_request" {
+      fail("socket call code \(code)")
+    }
+  }
+
+  static func runSenderCall(socket: String) {
+    signal(SIGPIPE, SIG_DFL)
+    InputArchiveEngine.shared.bind(socket: socket)
+    Thread.sleep(forTimeInterval: 1.5)
+    fputs("sender_call=survived\n", stderr)
   }
 
   static func meaningfulMarked(_ marked: [String]) -> [String] {

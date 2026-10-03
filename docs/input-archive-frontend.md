@@ -28,9 +28,12 @@ Legacy selection recording may continue; archive pause does not stop it.
 ## What is recorded
 
 Only confirmed `luna_pinyin` observations from ordinary clients are admitted
-with text. Unsupported or unknown schemas and the platform secure-input flag
-(`IsSecureEventInputEnabled`) produce a content-free exclusion notice, or
-nothing if capture is not enabled. That flag does not detect every credential
+with text. The schema is read from librime for that operation. A cached or
+hard-coded Luna identity is not enough. Initial, unknown, and switched schemas
+do not admit commit or raw-finalization text; they may emit a content-free
+exclusion notice. An exclusion notice elsewhere does not make a later terminal
+payload eligible. The platform secure-input flag (`IsSecureEventInputEnabled`)
+also omits text. That flag does not detect every credential
 field. Same-app invisible field, window, or caret changes are not observed;
 they stay an uncertainty, not a host-document interruption.
 
@@ -108,15 +111,16 @@ live input source. Stop only the collector that check started:
 
 ## Measured incremental cost
 
-MEAS-189-v1 pre-run manifest SHA-256
-`f14e3a2027cd357dfb9f5ee47643009ba1cce36719d35883e60cb0fc5d3f24ee`.
-The timing command exited 1. Retained raw
-`.local/ac189-timing/raw-1790989786.json` has 2,000 pairs in each of the
-eight strata. Paired p50 added cost is about 0.01–0.04 ms. Paired p95/p99
-exceed 1/3 ms for retype, number, space, mouse, and paging because those
-operations already vary by several milliseconds with capture off; the spikes
-do not line up across a pair. That run is not a Pass. It is not pixels, host
-persistence, or ranking benefit.
+Attempt 1's timing command is not certification for this repair. A new
+MEAS-189-v1 manifest is published before any attempt-2 sampling. Unavailable
+primary endpoints stay unavailable; handler return is a separate measurement.
+Backspace events must carry a character so production `handle` reaches
+`processKey`. Attempt 2 pre-run manifest SHA-256
+`3137367a399865810ba01f3fb69e9be5cd2dc56c236cb8853fbd2a8a611d13ec`.
+The timing command exited 1. Every stratum had 2,000 pairs and zero
+unavailable primary endpoints. short, long, and backspace met the paired
+p95/p99 target. retype, number, space, mouse, and paging did not. That is
+not a Pass. It is not pixels, host persistence, or ranking benefit.
 
 ## Limits
 

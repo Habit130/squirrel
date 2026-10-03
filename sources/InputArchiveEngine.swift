@@ -130,26 +130,37 @@ final class InputArchiveEngine {
     lock.unlock()
   }
 
-  func recordCommit(_ text: String, kind: String, outcome: String) {
-    let owned = String(text)
-    admitTerminal(kind: kind, outcome: outcome, text: owned, clientPresent: true)
+  func recordCommit(_ text: String, schema: String) {
+    admitTerminal(
+      kind: "commit_attempt",
+      outcome: "observed_attempt",
+      text: String(text),
+      schema: schema,
+      clientPresent: true
+    )
   }
 
-  func recordRaw(_ text: String) {
-    admitTerminal(kind: "raw_finalization", outcome: "raw_finalized", text: String(text), clientPresent: true)
+  func recordRaw(_ text: String, schema: String) {
+    admitTerminal(
+      kind: "raw_finalization",
+      outcome: "raw_finalized",
+      text: String(text),
+      schema: schema,
+      clientPresent: true
+    )
   }
 
-  func recordUnavailable() {
-    admitTerminal(kind: "unavailable_client", outcome: "unavailable_client", text: nil, clientPresent: false)
+  func recordUnavailable(schema: String) {
+    admitTerminal(kind: "unavailable_client", outcome: "unavailable_client", text: nil, schema: schema, clientPresent: false)
   }
 
-  func recordCancellation() {
-    admitTerminal(kind: "cancellation", outcome: "cancelled", text: nil, clientPresent: true)
+  func recordCancellation(schema: String) {
+    admitTerminal(kind: "cancellation", outcome: "cancelled", text: nil, schema: schema, clientPresent: true)
   }
 
   // periphery:ignore
-  func recordUnknown() {
-    admitTerminal(kind: "unknown_outcome", outcome: "unknown", text: nil, clientPresent: true)
+  func recordUnknown(schema: String) {
+    admitTerminal(kind: "unknown_outcome", outcome: "unknown", text: nil, schema: schema, clientPresent: true)
   }
 
   func observe(_ snapshot: InputArchiveSnapshot) {
@@ -184,7 +195,7 @@ final class InputArchiveEngine {
       current: owned
     )
     if kind == "cancellation" {
-      recordCancellation()
+      recordCancellation(schema: owned.schemaId)
       return
     }
     admitPage(kind: kind, outcome: outcome(for: kind), page: owned, operation: operation)
@@ -304,7 +315,7 @@ final class InputArchiveEngine {
     _ = admit(fields)
   }
 
-  private func admitTerminal(kind: String, outcome: String, text: String?, clientPresent: Bool) {
+  private func admitTerminal(kind: String, outcome: String, text: String?, schema: String, clientPresent: Bool) {
     if !clientPresent && kind != "unavailable_client" {
       return
     }
@@ -315,6 +326,11 @@ final class InputArchiveEngine {
       return
     }
     if kind != "unavailable_client" && InputArchiveSignals.secureEventInputEnabled() {
+      admitExclusion()
+      return
+    }
+    // Cached or hard-coded Luna identity is not proof. Unknown and other schemas exclude without text.
+    if kind != "unavailable_client" && schema != InputArchive.supportedSchema {
       admitExclusion()
       return
     }

@@ -16,6 +16,7 @@ final class SquirrelInputController: IMKInputController {
   private var preedit: String = ""
   private var selRange: NSRange = .empty
   private var caretPos: Int = 0
+  private var pendingArchiveCommit: String?
   private var lastModifiers: NSEvent.ModifierFlags = .init()
   private var session: RimeSessionId = 0
   private var schemaId: String = ""
@@ -270,10 +271,11 @@ final class SquirrelInputController: IMKInputController {
         let owned = String(cString: input)
         let hadClient = client != nil
         commit(string: owned)
+        let operationSchema = currentOperationSchema()
         if hadClient {
-          InputArchiveEngine.shared.recordRaw(owned)
+          InputArchiveEngine.shared.recordRaw(owned, schema: operationSchema)
         } else {
-          InputArchiveEngine.shared.recordUnavailable()
+          InputArchiveEngine.shared.recordUnavailable(schema: operationSchema)
         }
         rimeAPI.clear_composition(session)
       }
@@ -360,6 +362,15 @@ final class SquirrelInputController: IMKInputController {
     }
     guard found, let first = buffer.first, first != 0 else { return "" }
     return String(cString: buffer)
+  }
+
+  func currentOperationSchema() -> String {
+    guard session != 0 else { return "" }
+    var status = RimeStatus_stdbool.rimeStructInit()
+    guard rimeAPI.get_status(session, &status) else { return "" }
+    let schema = status.schema_id.map { String(cString: $0) } ?? ""
+    _ = rimeAPI.free_status(&status)
+    return schema
   }
 
   func publishArchiveMetadata() {
@@ -578,7 +589,7 @@ private extension SquirrelInputController {
       if let text = commitText.text {
         let owned = String(cString: text)
         commit(string: owned)
-        InputArchiveEngine.shared.recordCommit(owned, kind: "commit_attempt", outcome: "observed_attempt")
+        pendingArchiveCommit = owned
       }
       _ = rimeAPI.free_commit(&commitText)
     }
@@ -592,10 +603,14 @@ private extension SquirrelInputController {
     rimeConsumeCommittedText()
 
     var status = RimeStatus_stdbool.rimeStructInit()
+    var operationSchema = ""
     if rimeAPI.get_status(session, &status) {
+      if let schemaPointer = status.schema_id {
+        operationSchema = String(cString: schemaPointer)
+      }
       // swiftlint:disable:next identifier_name
-      if let schema_id = status.schema_id, schemaId == "" || schemaId != String(cString: schema_id) {
-        schemaId = String(cString: schema_id)
+      if !operationSchema.isEmpty && (schemaId == "" || schemaId != operationSchema) {
+        schemaId = operationSchema
         if schemaId != InputArchive.supportedSchema {
           InputArchiveEngine.shared.noteContinuityCut("source_change")
         }
@@ -603,6 +618,10 @@ private extension SquirrelInputController {
         refreshInlinePresentation()
       }
       _ = rimeAPI.free_status(&status)
+    }
+    if let pendingCommit = pendingArchiveCommit {
+      InputArchiveEngine.shared.recordCommit(pendingCommit, schema: operationSchema)
+      pendingArchiveCommit = nil
     }
 
     var ctx = RimeContext_stdbool.rimeStructInit()
