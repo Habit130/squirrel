@@ -23,6 +23,8 @@ final class SquirrelPanel: NSPanel {
   private var selRange: NSRange = .empty
   private var caretPos: Int = 0
   private var candidates: [String] = .init()
+  // periphery:ignore - isolated harness counts real panel.update returns
+  private(set) var updateCompletionCount: UInt64 = 0
   private var comments: [String] = .init()
   private var labels: [String] = .init()
   private var index: Int = 0
@@ -151,6 +153,7 @@ final class SquirrelPanel: NSPanel {
 
   // swiftlint:disable:next cyclomatic_complexity function_parameter_count
   func update(preedit: String, selRange: NSRange, caretPos: Int, candidates: [String], comments: [String], labels: [String], highlighted index: Int, page: Int, lastPage: Bool, update: Bool) {
+    defer { updateCompletionCount += 1 }
     if update {
       self.preedit = preedit
       self.selRange = selRange

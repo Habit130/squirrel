@@ -9,17 +9,7 @@ import Foundation
 import InputMethodKit
 
 @main
-struct SquirrelApp {
-  static let userDir = if let pwuid = getpwuid(getuid()) {
-    URL(fileURLWithFileSystemRepresentation: pwuid.pointee.pw_dir, isDirectory: true, relativeTo: nil).appending(components: "Library", "Rime")
-  } else {
-    try! FileManager.default.url(for: .libraryDirectory, in: .userDomainMask, appropriateFor: nil, create: false).appendingPathComponent("Rime", isDirectory: true)
-  }
-  static let appDir = "/Library/Input Library/Squirrel.app".withCString { dir in
-    URL(fileURLWithFileSystemRepresentation: dir, isDirectory: false, relativeTo: nil)
-  }
-  static let logDir = FileManager.default.temporaryDirectory.appending(component: "rime.squirrel", directoryHint: .isDirectory)
-
+enum SquirrelMain {
   // swiftlint:disable:next cyclomatic_complexity
   static func main() {
     let rimeAPI: RimeApi_stdbool = rime_get_api_stdbool().pointee

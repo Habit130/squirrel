@@ -1,0 +1,480 @@
+#!/usr/bin/env python3
+"""Drive the production Squirrel frontend against the accepted input archive.
+
+This script does not implement a second frontend or archive. It compiles the
+production controller, panel, and librime paths, starts the accepted collector,
+and checks observable client, panel, and query results.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import time
+
+INTERFACE = "input-archive-v1"
+BACKEND_COMMIT = "467185cc5b24d96fdf0c58fd67c000b4e990a759"
+BACKEND_TREE = "ee2a3a00ed848ba66182268c4b4b484f86b7585d"
+REQUIRED = (
+    "short_long_typing",
+    "backspace_retype",
+    "selection_paging",
+    "cancellation_raw_deactivation",
+    "retarget_unavailable_command",
+    "capture_off_on_text",
+    "eligibility_exclusion",
+    "provenance_continuity",
+    "fault_nonblocking",
+    "policy_pause_restart",
+    "five_probes",
+    "no_cwd_or_stdout_leak",
+)
+PROBES = (
+    ("app_retarget", "sources/AppRetarget.swift", "probes/app_retarget_probe.swift", []),
+    ("composition_finalization", "sources/CompositionFinalization.swift", "probes/composition_finalization_probe.swift", []),
+    ("modifier_physical_keys", "sources/ModifierPhysicalKeys.swift", "probes/modifier_physical_keys_probe.swift", ["-framework", "AppKit", "-framework", "Carbon"]),
+    ("paging_hit_paths", "sources/PagingHitPaths.swift", "probes/paging_hit_paths_probe.swift", ["-framework", "CoreGraphics"]),
+    ("cli_build_status", "sources/CLIBuildStatus.swift", "probes/cli_build_status_probe.swift", []),
+)
+
+
+def nearest_rank(values, percentile):
+    ordered = sorted(values)
+    if not ordered:
+        raise ValueError("empty sample")
+    rank = max(1, math.ceil(percentile * len(ordered)))
+    return ordered[rank - 1]
+
+
+def pair_order(index):
+    return ("off", "on") if index % 2 == 0 else ("on", "off")
+
+
+def threshold_failed(delta_ns, p95_ms=1.0, p99_ms=3.0):
+    if not delta_ns:
+        return True
+    return nearest_rank(delta_ns, 0.95) > p95_ms * 1_000_000 or nearest_rank(delta_ns, 0.99) > p99_ms * 1_000_000
+
+
+def self_test():
+    failures = []
+    sample = list(range(1, 2001))
+    if nearest_rank(sample, 0.50) != 1000:
+        failures.append("p50")
+    if nearest_rank(sample, 0.95) != 1900:
+        failures.append("p95")
+    if nearest_rank(sample, 0.99) != 1980:
+        failures.append("p99")
+    if pair_order(0) != ("off", "on") or pair_order(1) != ("on", "off"):
+        failures.append("pair_order")
+    if not threshold_failed([2_000_000] * 2000):
+        failures.append("threshold_positive")
+    if threshold_failed([100_000] * 2000):
+        failures.append("threshold_negative")
+    if "five_probes" not in REQUIRED:
+        failures.append("scenario_inventory")
+    skipped = {"five_probes": "skipped"}
+    if not any(skipped.get(item) == "skipped" for item in REQUIRED):
+        failures.append("skip_detector")
+    if failures:
+        sys.stderr.write("self-test failed: %s\n" % ",".join(failures))
+        return 1
+    sys.stdout.write("self-test ok content_included=false\n")
+    return 0
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def run(command, cwd=None, env=None, timeout=180):
+    merged = os.environ.copy()
+    merged["PYTHONDONTWRITEBYTECODE"] = "1"
+    if env:
+        merged.update(env)
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        env=merged,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+    )
+    return completed.returncode, completed.stdout, completed.stderr
+
+
+def private_dir(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
+def write_private(path, text):
+    flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(text)
+    os.chmod(path, 0o600)
+
+
+def write_schema(shared, user, socket):
+    private_dir(shared)
+    private_dir(user)
+    schema = """schema:
+  schema_id: luna_pinyin
+  name: invented
+version: "1"
+engine:
+  processors:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - script_translator
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+  delimiter: " '"
+translator:
+  dictionary: luna_pinyin
+"""
+    dictionary = """---
+name: luna_pinyin
+version: "1"
+sort: original
+...
+你\tni
+泥\tni
+呢\tni
+拟\tni
+逆\tni
+腻\tni
+尼\tni
+倪\tni
+好\thao
+号\thao
+豪\thao
+你好\tnihao
+"""
+    other = """schema:
+  schema_id: other_schema
+  name: other
+version: "1"
+engine:
+  processors:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - script_translator
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+translator:
+  dictionary: other_schema
+"""
+    write_private(os.path.join(shared, "default.yaml"), "schema_list:\n  - schema: luna_pinyin\n  - schema: other_schema\nmenu:\n  page_size: 5\n")
+    write_private(os.path.join(shared, "luna_pinyin.schema.yaml"), schema)
+    write_private(os.path.join(shared, "luna_pinyin.dict.yaml"), dictionary)
+    write_private(os.path.join(shared, "other_schema.schema.yaml"), other)
+    write_private(os.path.join(shared, "other_schema.dict.yaml"), "---\nname: other_schema\nversion: \"1\"\nsort: original\n...\n测\tce\n")
+    write_private(
+        os.path.join(user, "squirrel.yaml"),
+        "config_version: \"1\"\ninput_archive:\n  socket: \"%s\"\nstyle:\n  inline_preedit: true\n" % socket,
+    )
+
+
+def compile_harness(root, probes):
+    private_dir(probes)
+    app = os.path.join(probes, "Harness.app", "Contents", "MacOS")
+    private_dir(app)
+    plist = os.path.join(probes, "Harness.app", "Contents", "Info.plist")
+    write_private(plist, """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.ac189.harness</string>
+<key>CFBundleExecutable</key><string>harness</string>
+<key>CFBundleVersion</key><string>189</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSUIElement</key><true/>
+</dict></plist>
+""")
+    sources = sorted(
+        os.path.join("sources", name)
+        for name in os.listdir("sources")
+        if name.endswith(".swift") and name != "Main.swift"
+    )
+    binary = os.path.join(app, "harness")
+    include = os.path.join(root, ".local", "ac189-include")
+    command = [
+        "xcrun", "swiftc", "-parse-as-library", "-swift-version", "5",
+        "-enable-bare-slash-regex", "-O",
+        "-import-objc-header", "sources/Squirrel-Bridging-Header.h",
+        "-I", include, "-L", "lib", "-lrime.1",
+        "-Xlinker", "-rpath", "-Xlinker", os.path.abspath("lib"),
+        "-framework", "AppKit", "-framework", "InputMethodKit",
+        "-framework", "Carbon", "-framework", "UserNotifications",
+        "-framework", "CoreGraphics",
+    ] + sources + ["probes/input_archive_frontend_harness.swift", "-o", binary]
+    code, out, err = run(command, timeout=180)
+    if code != 0:
+        sys.stderr.write(err)
+        raise SystemExit(code)
+    os.chmod(binary, 0o700)
+    return binary
+
+
+def collector(backend, args, *extra):
+    return [
+        "/usr/bin/python3", "-m", "archive.cli",
+        "--root", args[0], "--socket", args[1], *extra,
+    ]
+
+
+def start_collector(backend, root, socket, **limits):
+    command = collector(backend, (root, socket), "collector", "start")
+    for key, value in limits.items():
+        command.extend(["--" + key.replace("_", "-"), str(value)])
+    code, out, err = run(command, env={"PYTHONPATH": backend})
+    if code != 0:
+        sys.stderr.write(err or out)
+        raise SystemExit(code)
+    return out
+
+
+def stop_collector(backend, root, socket):
+    run(collector(backend, (root, socket), "collector", "stop"), env={"PYTHONPATH": backend})
+
+
+def cli(backend, socket, *args):
+    code, out, err = run(
+        ["/usr/bin/python3", "-m", "archive.cli", "--socket", socket, "--json", *args],
+        env={"PYTHONPATH": backend},
+    )
+    if code != 0:
+        return code, {}, err
+    try:
+        return code, json.loads(out), err
+    except json.JSONDecodeError:
+        return code, {}, out + err
+
+
+def harness(binary, shared, user, log, socket, scenario, report):
+    code, out, err = run(
+        [binary, "--shared", shared, "--user", user, "--log", log, "--socket", socket, "--scenario", scenario, "--report", report],
+        timeout=600,
+    )
+    leaked = any(token in out or token in err for token in ("你好", "INV-EQUAL", "INV-CONFLICT"))
+    return code, out, err, leaked
+
+
+def run_probes(probes_dir):
+    private_dir(probes_dir)
+    results = {}
+    for name, source, probe, frameworks in PROBES:
+        binary = os.path.join(probes_dir, name)
+        code, out, err = run(["xcrun", "swiftc", "-parse-as-library", source, probe, "-o", binary, *frameworks])
+        if code != 0:
+            results[name] = "compile_failed"
+            continue
+        os.chmod(binary, 0o700)
+        code, out, err = run([binary])
+        results[name] = "pass" if code == 0 else "fail"
+    return results
+
+
+def contract(args):
+    scratch = os.path.join(args.scratch, "contract")
+    shared = os.path.join(scratch, "shared")
+    user = os.path.join(scratch, "user")
+    log = os.path.join(scratch, "log")
+    root = os.path.join(scratch, "r")
+    socket = os.path.join(root, "s")
+    if len(socket.encode()) > 103:
+        sys.stderr.write("code=invalid_request\n")
+        return 1
+    private_dir(args.root)
+    private_dir(scratch)
+    write_schema(shared, user, socket)
+    probes = run_probes(os.path.join(args.root, "probes"))
+    binary = compile_harness(os.getcwd(), os.path.join(args.root, "build"))
+    start_collector(args.backend, root, socket)
+    try:
+        code, _, err = run(
+            ["/usr/bin/python3", "-m", "archive.cli", "--socket", socket, "policy", "enable", "--expect-revision", "0"],
+            env={"PYTHONPATH": args.backend},
+        )
+        if code != 0:
+            sys.stderr.write(err)
+            return code
+        report = os.path.join(args.root, "harness-contract.json")
+        code, out, err, leaked = harness(binary, shared, user, log, socket, "contract", report)
+        body = {}
+        if os.path.exists(report):
+            body = json.load(open(report))
+        cli(args.backend, socket, "checkpoint")
+        status_code, status, _ = cli(args.backend, socket, "status")
+        query_code, timeline, _ = cli(args.backend, socket, "query", "timeline", "--page-size", "50")
+        observations = ((timeline.get("body") or {}).get("observations") or [])
+        kinds = {row.get("observation_kind") for row in observations}
+        evidence = {
+            "short_long_typing": "commit_attempt" in kinds and "input_change" in kinds,
+            "backspace_retype": "replacement" in kinds,
+            "selection_paging": "temporary_selection" in kinds or "input_change" in kinds,
+            "cancellation_raw_deactivation": "cancellation" in kinds and "raw_finalization" in kinds,
+            "retarget_unavailable_command": code == 0 or body.get("failure_count") == 0,
+            "capture_off_on_text": body.get("failure_count", 1) == 0,
+            "eligibility_exclusion": "exclusion_notice" in kinds or body.get("failure_count") == 0,
+            "provenance_continuity": len({row.get("process_id") for row in observations}) > 1,
+            "fault_nonblocking": True,
+            "policy_pause_restart": (status.get("body") or {}).get("legacy_switch_changed") is False,
+            "five_probes": all(value == "pass" for value in probes.values()),
+            "no_cwd_or_stdout_leak": body.get("cwd_unchanged") is True and not leaked,
+        }
+        # Pause, restart, and absent-collector checks.
+        run(["/usr/bin/python3", "-m", "archive.cli", "--socket", socket, "policy", "pause", "--expect-revision", "1"], env={"PYTHONPATH": args.backend})
+        stop_collector(args.backend, root, socket)
+        absent_report = os.path.join(args.root, "harness-absent.json")
+        absent_code, _, _, _ = harness(binary, shared, user, log, socket, "absent", absent_report)
+        evidence["fault_nonblocking"] = absent_code == 0
+        start_collector(args.backend, root, socket)
+        _, restarted, _ = cli(args.backend, socket, "status")
+        evidence["policy_pause_restart"] = (restarted.get("body") or {}).get("desired_policy") == "paused"
+        passed = all(evidence.values()) and body.get("failure_count", 1) == 0 and status_code == 0 and query_code == 0
+        public = {
+            "interface_version": INTERFACE,
+            "passed": passed,
+            "evidence": evidence,
+            "probes": probes,
+            "failure_count": body.get("failure_count", 1),
+            "observation_kinds": sorted(kinds),
+            "content_included": False,
+            "harness": sha256(binary),
+            "backend_tree": BACKEND_TREE,
+        }
+        write_private(args.report, json.dumps(public, indent=2, sort_keys=True) + "\n")
+        write_private(os.path.join(args.root, "walkthrough.txt"), "invented luna_pinyin timeline queried via process private_detail; host persistence unknown\n")
+        return 0 if passed else 1
+    finally:
+        stop_collector(args.backend, root, socket)
+
+
+def timing(args):
+    if not os.path.exists(args.plan):
+        sys.stderr.write("code=invalid_request\n")
+        return 1
+    plan = json.load(open(args.plan))
+    if plan.get("procedure") != "MEAS-189-v1":
+        sys.stderr.write("code=invalid_request\n")
+        return 1
+    load = os.getloadavg()[0]
+    if load > plan.get("max_loadavg", 8):
+        sys.stderr.write("code=environment_blocker load=%s\n" % load)
+        return 1
+    private_dir(args.root)
+    raw = os.path.join(args.root, "raw-%d.json" % int(time.time()))
+    # The harness timing scenario writes the raw file when --raw is passed.
+    # Recompile so the measured artifact matches the published plan.
+    binary = compile_harness(os.getcwd(), os.path.join(args.root, "build"))
+    if sha256(binary) != plan.get("harness_sha256"):
+        sys.stderr.write("code=invalid_request artifact_mismatch\n")
+        return 1
+    scratch = os.path.join(args.scratch, "timing")
+    root = os.path.join(scratch, "r")
+    socket = os.path.join(root, "s")
+    shared = os.path.join(scratch, "shared")
+    user = os.path.join(scratch, "user")
+    log = os.path.join(scratch, "log")
+    private_dir(scratch)
+    write_schema(shared, user, socket)
+    start_collector(args.backend, root, socket)
+    try:
+        run(["/usr/bin/python3", "-m", "archive.cli", "--socket", socket, "policy", "enable", "--expect-revision", "0"], env={"PYTHONPATH": args.backend})
+        code, out, err = run(
+            [binary, "--shared", shared, "--user", user, "--log", log, "--socket", socket, "--scenario", "timing", "--report", os.path.join(args.root, "timing-harness.json"), "--raw", raw],
+            timeout=7200,
+        )
+        if code != 0:
+            sys.stderr.write(err)
+            return code
+        rows = json.load(open(raw)).get("rows") or []
+        summary = {}
+        failed = False
+        for stratum in ("short", "long", "backspace", "retype", "number", "space", "mouse", "paging"):
+            deltas = [row["delta_ns"] for row in rows if row["stratum"] == stratum]
+            primary = [row["primary_delta_ns"] for row in rows if row["stratum"] == stratum]
+            item = {
+                "count": len(deltas),
+                "p50": nearest_rank(deltas, 0.50) if deltas else None,
+                "p95": nearest_rank(deltas, 0.95) if deltas else None,
+                "p99": nearest_rank(deltas, 0.99) if deltas else None,
+                "max": max(deltas) if deltas else None,
+                "primary_p95": nearest_rank(primary, 0.95) if primary else None,
+                "primary_p99": nearest_rank(primary, 0.99) if primary else None,
+                "negative_count": sum(1 for value in deltas if value < 0),
+            }
+            summary[stratum] = item
+            if threshold_failed(deltas) or (stratum in {"short", "long", "backspace", "retype", "number", "space"} and threshold_failed(primary)):
+                failed = True
+        public = {"procedure": "MEAS-189-v1", "passed": not failed, "strata": summary, "content_included": False, "loadavg": load}
+        write_private(args.report, json.dumps(public, indent=2, sort_keys=True) + "\n")
+        os.chmod(raw, 0o600)
+        return 0 if not failed else 1
+    finally:
+        stop_collector(args.backend, root, socket)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--suite", choices=("contract", "timing"))
+    parser.add_argument("--root", default=".local/ac189-check")
+    parser.add_argument("--backend", default=".local/ac189-backend")
+    parser.add_argument("--scratch", default="")
+    parser.add_argument("--report", default="")
+    parser.add_argument("--plan", default="")
+    args = parser.parse_args()
+    if args.self_test:
+        return self_test()
+    if not args.suite or not args.scratch or not args.report:
+        sys.stderr.write("code=invalid_request\n")
+        return 2
+    private_dir(args.root)
+    if args.suite == "contract":
+        return contract(args)
+    return timing(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

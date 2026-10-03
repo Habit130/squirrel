@@ -33,6 +33,9 @@ final class SquirrelInputController: IMKInputController {
   // swiftlint:disable:next cyclomatic_complexity
   override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
     guard let event = event else { return false }
+    InputArchiveEngine.shared.beginAction("key_handler", eventTimestamp: event.timestamp)
+    defer { InputArchiveEngine.shared.finishAction() }
+    InputArchiveEngine.shared.notePendingOperation(archiveOperation(for: event))
     let modifiers = event.modifierFlags
 
     // Return true to consume the key event; return false to pass it to the client app.
@@ -111,6 +114,10 @@ final class SquirrelInputController: IMKInputController {
   }
 
   func selectCandidate(_ index: Int) -> Bool {
+    InputArchiveEngine.shared.beginAction("mouse_selection", eventTimestamp: nil)
+    defer { InputArchiveEngine.shared.finishAction() }
+    InputArchiveEngine.shared.notePendingOperation("mouse_selection")
+    publishArchiveMetadata()
     let success = rimeAPI.select_candidate_on_current_page(session, index)
     if success {
       rimeUpdate()
@@ -120,6 +127,10 @@ final class SquirrelInputController: IMKInputController {
 
   // swiftlint:disable:next identifier_name
   func page(up: Bool) -> Bool {
+    InputArchiveEngine.shared.beginAction("paging", eventTimestamp: nil)
+    defer { InputArchiveEngine.shared.finishAction() }
+    InputArchiveEngine.shared.notePendingOperation("paging")
+    publishArchiveMetadata()
     var handled = false
     handled = rimeAPI.change_page(session, up)
     if handled {
@@ -129,6 +140,7 @@ final class SquirrelInputController: IMKInputController {
   }
 
   func moveCaret(forward: Bool) -> Bool {
+    publishArchiveMetadata()
     let currentCaretPos = rimeAPI.get_caret_pos(session)
     guard let input = rimeAPI.get_input(session) else { return false }
     if forward {
@@ -196,9 +208,11 @@ final class SquirrelInputController: IMKInputController {
   }
 
   override func deactivateServer(_ sender: Any!) {
+    InputArchiveEngine.shared.noteContinuityCut("deactivation")
     hidePalettes()
     commitComposition(sender)
     client = nil
+    InputArchiveEngine.shared.invalidateMetadata()
   }
 
   func compositionFinalizationState(rimeAvailable: Bool) -> CompositionFinalizationState {
@@ -248,9 +262,19 @@ final class SquirrelInputController: IMKInputController {
 
   override func commitComposition(_ sender: Any!) {
     self.client ?= sender as? IMKTextInput
+    InputArchiveEngine.shared.beginAction("raw_finalization", eventTimestamp: nil)
+    defer { InputArchiveEngine.shared.finishAction() }
+    publishArchiveMetadata()
     if session != 0 {
       if let input = rimeAPI.get_input(session) {
-        commit(string: String(cString: input))
+        let owned = String(cString: input)
+        let hadClient = client != nil
+        commit(string: owned)
+        if hadClient {
+          InputArchiveEngine.shared.recordRaw(owned)
+        } else {
+          InputArchiveEngine.shared.recordUnavailable()
+        }
         rimeAPI.clear_composition(session)
       }
     }
@@ -318,6 +342,57 @@ final class SquirrelInputController: IMKInputController {
   deinit {
     destroySession()
   }
+
+  // periphery:ignore
+  func archiveSelectSchema(_ schema: String) -> Bool {
+    guard session != 0 else { return false }
+    return schema.withCString { pointer in
+      rimeAPI.select_schema(session, pointer)
+    }
+  }
+
+  // periphery:ignore
+  func archiveSessionProperty(_ key: String) -> String {
+    guard session != 0 else { return "" }
+    var buffer = [CChar](repeating: 0, count: 160)
+    let found = buffer.withUnsafeMutableBufferPointer { pointer -> Bool in
+      rimeAPI.get_property(session, key, pointer.baseAddress, 160)
+    }
+    guard found, let first = buffer.first, first != 0 else { return "" }
+    return String(cString: buffer)
+  }
+
+  func publishArchiveMetadata() {
+    InputArchiveEngine.shared.publishMetadata { key, value in
+      guard session != 0 else { return }
+      key.withCString { keyPointer in
+        value.withCString { valuePointer in
+          rimeAPI.set_property(session, keyPointer, valuePointer)
+        }
+      }
+    }
+  }
+
+  func archiveOperation(for event: NSEvent) -> String {
+    if event.type == .flagsChanged {
+      return "flags"
+    }
+    if event.modifierFlags.contains(.command) {
+      return "command"
+    }
+    switch event.keyCode {
+    case 51:
+      return "backspace"
+    case 49:
+      return "space"
+    case 53:
+      return "escape"
+    case 18, 19, 20, 21, 23, 22, 26, 28, 25, 29:
+      return "number_select"
+    default:
+      return "key_update"
+    }
+  }
 }
 
 private extension SquirrelInputController {
@@ -327,6 +402,7 @@ private extension SquirrelInputController {
     if chordKeyCount > 0 && session != 0 {
       // Chord typing releases are synthesized after the configured timeout.
       for i in 0..<chordKeyCount {
+        publishArchiveMetadata()
         let handled = rimeAPI.process_key(session, Int32(chordKeyCodes[i]), Int32(chordModifiers[i] | kReleaseMask.rawValue))
         if handled {
           processedKeys = true
@@ -370,6 +446,7 @@ private extension SquirrelInputController {
   }
 
   func createSession() {
+    InputArchiveEngine.shared.noteContinuityCut("session_recreation")
     appliedAppOptions = nil
     appOptionDefaults = [:]
     session = rimeAPI.create_session()
@@ -380,6 +457,7 @@ private extension SquirrelInputController {
       }
     }
     applyClientAppOptions()
+    InputArchiveEngine.shared.reloadConfiguration()
     print("createSession: \(currentApp)")
   }
 
@@ -394,6 +472,9 @@ private extension SquirrelInputController {
       currentApp = identity.name
       Self.unknownAppCnt = identity.nextUnknownIndex
       return
+    }
+    if identity.appChanged {
+      InputArchiveEngine.shared.noteContinuityCut("retarget")
     }
     let incoming = NSApp.squirrelAppDelegate.config?.getAppOptions(identity.name) ?? [:]
     var currentValues: [String: Bool] = [:]
@@ -456,6 +537,7 @@ private extension SquirrelInputController {
   }
 
   func processKey(_ rimeKeycode: UInt32, modifiers rimeModifiers: UInt32) -> Bool {
+    publishArchiveMetadata()
     if let panel = NSApp.squirrelAppDelegate.panel {
       if panel.linear != rimeAPI.get_option(session, "_linear") {
         rimeAPI.set_option(session, "_linear", panel.linear)
@@ -494,7 +576,9 @@ private extension SquirrelInputController {
     var commitText = RimeCommit.rimeStructInit()
     if rimeAPI.get_commit(session, &commitText) {
       if let text = commitText.text {
-        commit(string: String(cString: text))
+        let owned = String(cString: text)
+        commit(string: owned)
+        InputArchiveEngine.shared.recordCommit(owned, kind: "commit_attempt", outcome: "observed_attempt")
       }
       _ = rimeAPI.free_commit(&commitText)
     }
@@ -512,6 +596,9 @@ private extension SquirrelInputController {
       // swiftlint:disable:next identifier_name
       if let schema_id = status.schema_id, schemaId == "" || schemaId != String(cString: schema_id) {
         schemaId = String(cString: schema_id)
+        if schemaId != InputArchive.supportedSchema {
+          InputArchiveEngine.shared.noteContinuityCut("source_change")
+        }
         NSApp.squirrelAppDelegate.loadSettings(for: schemaId)
         refreshInlinePresentation()
       }
@@ -602,18 +689,52 @@ private extension SquirrelInputController {
       let lastPage = ctx.menu.is_last_page
 
       let selRange = NSRange(location: start.utf16Offset(in: preedit), length: preedit.utf16.distance(from: start, to: end))
+      let highlightedIndex = Int(ctx.menu.highlighted_candidate_index)
       showPanel(preedit: inlinePreedit ? "" : preedit, selRange: selRange, caretPos: caretPos.utf16Offset(in: preedit),
-                candidates: candidates, comments: comments, labels: labels, highlighted: Int(ctx.menu.highlighted_candidate_index),
+                candidates: candidates, comments: comments, labels: labels, highlighted: highlightedIndex,
                 page: page, lastPage: lastPage)
+      let ownedPreedit = preedit
+      let ownedCandidates = candidates
+      let ownedComments = comments
+      let ownedCaret = caretPos.utf16Offset(in: preedit)
       _ = rimeAPI.free_context(&ctx)
+      InputArchiveEngine.shared.observe(InputArchiveSnapshot(
+        schemaId: schemaId,
+        preedit: ownedPreedit,
+        candidates: ownedCandidates,
+        comments: ownedComments,
+        highlighted: highlightedIndex,
+        page: page,
+        lastPage: lastPage,
+        caretUTF16: ownedCaret,
+        inputLength: ownedPreedit.utf8.count,
+        application: currentApp,
+        clientPresent: client != nil,
+        operation: ""
+      ))
     } else {
       hidePalettes()
+      InputArchiveEngine.shared.observe(InputArchiveSnapshot(
+        schemaId: schemaId,
+        preedit: "",
+        candidates: [],
+        comments: [],
+        highlighted: 0,
+        page: 0,
+        lastPage: true,
+        caretUTF16: 0,
+        inputLength: 0,
+        application: currentApp,
+        clientPresent: client != nil,
+        operation: ""
+      ))
     }
   }
 
   func commit(string: String) {
     guard let client = client else { return }
     client.insertText(string, replacementRange: .empty)
+    InputArchiveEngine.shared.markEndpoint("insert_text")
     preedit = ""
     hidePalettes()
   }
@@ -638,6 +759,7 @@ private extension SquirrelInputController {
     let attrs = mark(forStyle: kTSMHiliteSelectedRawText, at: remainingRange)! as! [NSAttributedString.Key: Any]
     attrString.setAttributes(attrs, range: remainingRange)
     client.setMarkedText(attrString, selectionRange: NSRange(location: caretPos, length: 0), replacementRange: .empty)
+    InputArchiveEngine.shared.markEndpoint("marked_text")
   }
 
   // swiftlint:disable:next function_parameter_count
@@ -650,6 +772,7 @@ private extension SquirrelInputController {
       panel.inputController = self
       panel.update(preedit: preedit, selRange: selRange, caretPos: caretPos, candidates: candidates, comments: comments, labels: labels,
                    highlighted: highlighted, page: page, lastPage: lastPage, update: true)
+      InputArchiveEngine.shared.markEndpoint("panel_update")
     }
   }
 
