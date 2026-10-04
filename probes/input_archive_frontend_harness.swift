@@ -305,6 +305,12 @@ enum InputArchiveFrontendHarness {
 
   static func runTiming() {
     expect(waitForPolicy("enabled"), "timing policy not fresh")
+    // The engine reports the operation's schema; the eligible fixture schema has
+    // to be selected before any measured stratum, otherwise every observation
+    // would be ineligible and the capture-on arm would archive nothing.
+    selectLuna()
+    clearComposition()
+    expect(InputArchiveEngine.shared.contentFreeStatus()["queued"] != nil, "engine status unavailable")
     let strata = ["short", "long", "backspace", "retype", "number", "space", "mouse", "paging"]
     var rows: [[String: Any]] = []
     for stratum in strata {
@@ -373,6 +379,10 @@ enum InputArchiveFrontendHarness {
 
   static func prepare(_ stratum: String) {
     InputArchiveEngine.shared.setMeasurementSuppressed(true)
+    // Reset the equivalent pre-state outside the measured operation: the
+    // eligible fixture schema is re-selected and the composition cleared before
+    // each arm, never inside `perform`.
+    selectLuna()
     clearComposition()
     switch stratum {
     case "short", "backspace", "number", "space", "mouse", "paging":

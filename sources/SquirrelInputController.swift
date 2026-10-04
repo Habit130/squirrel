@@ -273,20 +273,19 @@ final class SquirrelInputController: IMKInputController {
     let operationSchema = currentOperationSchema()
     let input = rimeAPI.get_input(session).map { String(cString: $0) }
     let hadClient = client != nil
-    if let owned = input {
+    if let owned = input, !owned.isEmpty {
       commit(string: owned)
       if hadClient {
         InputArchiveEngine.shared.recordRaw(owned, schema: operationSchema)
       } else {
         InputArchiveEngine.shared.recordUnavailable(schema: operationSchema)
       }
-    } else if hadClient {
-      // Global finalization precedes session invalidation: an observed insertion
-      // with no readable engine input still records its terminal outcome.
-      InputArchiveEngine.shared.recordRaw("", schema: operationSchema)
     } else {
+      // Global finalization precedes session invalidation: an observed terminal
+      // outcome is recorded even when librime reports no readable composition.
       InputArchiveEngine.shared.recordUnavailable(schema: operationSchema)
     }
+    rimeAPI.clear_composition(session)
     rimeAPI.clear_composition(session)
   }
 

@@ -742,6 +742,24 @@ def timing(args):
             sys.stderr.write(err)
             return code
         rows = json.load(open(raw)).get("rows") or []
+        # A valid capture-on arm must really have archived eligible observations.
+        # Without this the artifact guard alone would accept a run in which every
+        # observation was excluded and the deltas measured nothing.
+        archived = os.path.join(scratch, "r", "observations.jsonl")
+        eligible = 0
+        if os.path.exists(archived):
+            for line in open(archived):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("eligibility") == "included":
+                    eligible += 1
+        if eligible == 0:
+            sys.stderr.write("code=invalid_request capture_on_arm_archived_nothing\n")
+            return 1
         summary = {}
         failed = False
         for stratum in ("short", "long", "backspace", "retype", "number", "space", "mouse", "paging"):
