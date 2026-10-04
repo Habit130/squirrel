@@ -331,6 +331,13 @@ enum InputArchiveFrontendHarness {
     let order = pair % 2 == 0 ? ["off", "on"] : ["on", "off"]
     var samples: [String: UInt64] = [:]
     for arm in order {
+      // Equivalent pre-state reset before the measured operation: capture is
+      // eligible while the composition is cleared and the stratum pre-state is
+      // composed, so neither arm inherits an unobserved prefix. Only the
+      // measured operation itself runs with the arm's eligibility applied.
+      InputArchiveEngine.shared.setMeasurementSuppressed(false)
+      clearComposition()
+      selectLuna()
       prepare(stratum)
       InputArchiveEngine.shared.setMeasurementSuppressed(arm == "off")
       let beforePanel = NSApp.squirrelAppDelegate.panel?.updateCompletionCount ?? 0
@@ -378,12 +385,7 @@ enum InputArchiveFrontendHarness {
   }
 
   static func prepare(_ stratum: String) {
-    InputArchiveEngine.shared.setMeasurementSuppressed(true)
-    // Reset the equivalent pre-state outside the measured operation: the
-    // eligible fixture schema is re-selected and the composition cleared before
-    // each arm, never inside `perform`.
-    selectLuna()
-    clearComposition()
+    // The caller has cleared the composition and selected the schema.
     switch stratum {
     case "short", "backspace", "number", "space", "mouse", "paging":
       type("niha")
