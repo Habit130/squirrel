@@ -174,18 +174,15 @@ final class InputArchiveEngine {
     }
     lock.lock()
     let unobserved = compositionUnobserved
-    let recorded = lastRecordedPreedit
     lock.unlock()
-    // `recorded` is the last preedit this engine actually admitted for the
-    // composition. An eligible continuation keeps it as a prefix; a divergence
-    // means text was produced while this frontend could not observe it.
-    if unobserved && !(recorded.isEmpty ? owned.preedit.isEmpty : owned.preedit.hasPrefix(recorded)) {
+    // A composition that was ineligible at any observed point stays excluded
+    // until its empty/terminal boundary. Continuing the last recorded preedit
+    // does not prove that nothing was typed while capture was paused or secure
+    // input was active, so it must not resume capture from a full snapshot.
+    if unobserved {
       admitExclusion()
       return
     }
-    lock.lock()
-    compositionUnobserved = false
-    lock.unlock()
     if !processOpen && hasContent {
       openProcess()
     }
