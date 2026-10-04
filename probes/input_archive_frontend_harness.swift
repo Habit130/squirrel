@@ -119,6 +119,14 @@ enum InputArchiveFrontendHarness {
       runAssociationFixtures()
     case "schema-gate":
       runSchemaGate()
+    case "transition-edge":
+      runTransitionEdge()
+    case "terminal-provenance":
+      runTerminalProvenance()
+    case "fault-burst":
+      runFaultBurst()
+    case "concurrent-status":
+      runConcurrentStatus()
     case "socket-call":
       runSocketCall(socket: arguments["socket"] ?? "")
     case "sender-call":
@@ -438,6 +446,57 @@ enum InputArchiveFrontendHarness {
     )!
   }
 
+  /// Composes under a locally non-eligible state, becomes eligible part way
+  /// through, then commits. The client must still receive the text once; the
+  /// archive must not admit the prefix that was never observed.
+  /// Composes under a locally non-eligible state, becomes eligible part way
+  /// through a composition, then commits. The client must still receive the
+  /// text exactly once; the archive must not admit the prefix that was never
+  /// observed.
+  static func runTransitionEdge() {
+    expect(waitForPolicy("enabled"), "transition policy not fresh")
+    selectLuna()
+    clearComposition()
+    client.reset()
+    let previous = InputArchiveSignals.secureEventInputEnabled
+    // An excluded composition is abandoned, then a second composition starts
+    // while still ineligible and becomes eligible mid-way at "niha".
+    InputArchiveSignals.secureEventInputEnabled = { true }
+    typeCode("jiamin")
+    clearComposition()
+    type("niha")
+    InputArchiveSignals.secureEventInputEnabled = previous
+    type("o")
+    sendKey(49, " ")
+    let inserts = client.inserts
+    expect(inserts.contains { $0.contains("你好") }, "mid-transition commit missing from client")
+    expect(inserts.filter { $0.contains("你好") }.count == 1, "mid-transition commit was not inserted exactly once")
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+    selectLuna()
+    clearComposition()
+    client.reset()
+    typeCode("jiazheng")
+    sendKey(49, " ")
+    expect(client.inserts.contains { $0.contains("甲正") }, "post-transition eligible commit missing from client")
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+  }
+
+  /// Finalizes a live composition through deactivation so the stored raw
+  /// terminal can be compared with the pages it closes.
+  static func runTerminalProvenance() {
+    expect(waitForPolicy("enabled"), "terminal policy not fresh")
+    selectLuna()
+    clearComposition()
+    client.reset()
+    typeCode("jiazheng")
+    controller?.deactivateServer(client)
+    controller?.activateServer(client)
+    expect(client.inserts.contains { $0.contains("jiazheng") }, "deactivation raw finalization missing from client")
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+    clearComposition()
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+  }
+
   static func runSchemaGate() {
     expect(waitForPolicy("enabled"), "schema gate policy not fresh")
     selectLuna()
@@ -474,6 +533,43 @@ enum InputArchiveFrontendHarness {
     for character in spelling {
       sendKey(codes[character] ?? 45, String(character))
     }
+  }
+
+  /// A held/failing collector must not block the real input path. The whole
+  /// burst is timed by a separate watchdog bound rather than by the sender.
+  static func runFaultBurst() {
+    selectLuna()
+    clearComposition()
+    client.reset()
+    let started = InputArchiveClock.now()
+    for index in 0..<40 {
+      typeCode(index % 2 == 0 ? "jiazheng" : "niha")
+      sendKey(49, " ")
+    }
+    let elapsed = InputArchiveClock.nanoseconds(from: InputArchiveClock.now() &- started)
+    expect(elapsed < 5_000_000_000, "held collector blocked the input path")
+    expect(client.inserts.count >= 40, "held collector lost client insertions")
+    let status = InputArchiveEngine.shared.contentFreeStatus()
+    expect(status["content_included"] == "false", "status exposed content")
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 2)
+  }
+
+  /// A bounded management query issued while the frontend is working must not
+  /// change observable input behavior or expose content.
+  static func runConcurrentStatus() {
+    selectLuna()
+    clearComposition()
+    client.reset()
+    var statuses: [[String: String]] = []
+    for _ in 0..<12 {
+      typeCode("jiazheng")
+      statuses.append(InputArchiveEngine.shared.contentFreeStatus())
+      sendKey(53, "\u{1b}")
+    }
+    expect(statuses.allSatisfy { $0["content_included"] == "false" }, "management status exposed content")
+    expect(statuses.allSatisfy { $0["globally_effective"] == "false" }, "status claimed global effectiveness")
+    expect(statuses.allSatisfy { $0["legacy_switch_changed"] == "false" }, "legacy switch was reported changed")
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
   }
 
   static func runSocketCall(socket: String) {

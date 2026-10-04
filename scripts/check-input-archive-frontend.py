@@ -342,6 +342,154 @@ def payload_text(row):
     return ""
 
 
+def payload_preedit(row):
+    payload = row.get("payload")
+    if isinstance(payload, dict):
+        return str(payload.get("text") or payload.get("preedit") or "")
+    return ""
+
+
+PAGE_KINDS = ("start", "input_change", "replacement", "temporary_selection")
+
+
+def archive_relations(backend, socket):
+    """Check persisted archive relations through the public query interface.
+
+    These are the relations the attempt-2 independent probes found corrupted:
+    a composition that is finalized while its observed process is still open
+    must store its terminal against that same process and segment, and a
+    composition whose prefix was never observed must never be admitted later.
+    """
+    code, _, err = cli(backend, socket, "checkpoint")
+    if code != 0:
+        return code, {}, err
+    code, rows, err = query_payloads(backend, socket)
+    if code != 0:
+        return code, {}, err
+    rows = sorted(rows, key=lambda row: row.get("durable_seq") or 0)
+
+    # Terminal binding: a terminal that closes an observed composition must be
+    # stored against that composition's process and segment. A terminal is
+    # treated as closing the page only when the observed input it reports
+    # matches the page it follows; unrelated finalizations are not comparable.
+    terminal_binding = True
+    terminal_detail = []
+    for index, row in enumerate(rows):
+        if row.get("observation_kind") != "raw_finalization":
+            continue
+        source = row.get("source_instance_id")
+        prior = [
+            candidate for candidate in rows[:index]
+            if candidate.get("source_instance_id") == source
+            and candidate.get("observation_kind") in PAGE_KINDS
+        ]
+        if not prior:
+            continue
+        page = prior[-1]
+        closes_page = payload_text(row) == payload_preedit(page)
+        same_process = page.get("process_id") == row.get("process_id")
+        same_segment = page.get("continuity_segment_id") == row.get("continuity_segment_id")
+        entry = {
+            "terminal_seq": row.get("durable_seq"),
+            "page_seq": page.get("durable_seq"),
+            "closes_page": closes_page,
+            "same_process": same_process,
+            "same_segment": same_segment,
+        }
+        if closes_page:
+            if not (same_process and same_segment):
+                terminal_binding = False
+            terminal_detail.append(entry)
+
+    # No stored payload may carry text that was composed while ineligible.
+    joined = "\n".join(payload_text(row) for row in rows)
+
+    detail = {
+        "raw_terminals_observed": len(terminal_detail),
+        "raw_terminal_binding": terminal_detail,
+        "excluded_canaries_absent": {
+            "jiamin": "jiamin" not in joined,
+            "甲敏": "甲敏" not in joined,
+            "甲斥": "甲斥" not in joined,
+        },
+        "eligible_canary_present": "甲正" in joined,
+    }
+    evidence = {
+        "raw_terminal_process_continuity": terminal_binding and bool(terminal_detail),
+        "no_unobserved_prefix_admitted": all(detail["excluded_canaries_absent"].values()),
+        "eligible_content_still_recorded": detail["eligible_canary_present"],
+    }
+    return 0, {"evidence": evidence, "detail": detail}, ""
+
+
+def fault_coverage(binary, root, scratch, shared, user, log):
+    """Real held/failing collector, bounded queue, capacity and concurrent query.
+
+    Every arm compiles and drives the production controller; only the collector
+    side is faulted, and each arm uses its own collector root.
+    """
+    results = {}
+    env = {"PYTHONPATH": os.environ.get("AC189_BACKEND", ".local/ac189-a3-backend")}
+
+    def collector_call(collector_root, *args):
+        return run(
+            ["/usr/bin/python3", "-m", "archive.cli", "--root", collector_root, "--socket", os.path.join(collector_root, "s"), *args],
+            env=env,
+        )
+
+    # Arm 1: bounded producer queue with the collector absent for the burst.
+    held_root = os.path.join(scratch, "fault-held-r")
+    private_dir(held_root)
+    held_socket = os.path.join(held_root, "s")
+    report = os.path.join(root, "fault-burst.json")
+    code, out, err = run(
+        [binary, "--shared", shared, "--user", user, "--log", log, "--socket", held_socket,
+         "--scenario", "fault-burst", "--report", report],
+        timeout=600,
+    )
+    body = json.load(open(report)) if os.path.exists(report) else {}
+    results["absent_collector_burst"] = code == 0 and body.get("failure_count", 1) == 0
+
+    # Arm 2: bounded queue count with a live collector, then a concurrent
+    # management query while the frontend is composing.
+    bounded_root = os.path.join(scratch, "fault-bounded-r")
+    private_dir(bounded_root)
+    bounded_socket = os.path.join(bounded_root, "s")
+    code, out, err = run(
+        ["/usr/bin/python3", "-m", "archive.cli", "--root", bounded_root, "--socket", bounded_socket,
+         "collector", "start", "--producer-queue-count", "8", "--producer-queue-bytes", "8192",
+         "--archive-capacity-bytes", "65536", "--collector-queue-count", "8"],
+        env=env,
+    )
+    results["bounded_collector_started"] = code == 0
+    if code == 0:
+        run(
+            ["/usr/bin/python3", "-m", "archive.cli", "--socket", bounded_socket, "policy", "enable", "--expect-revision", "0"],
+            env=env,
+        )
+        concurrent_report = os.path.join(root, "concurrent-status.json")
+        concurrent_code, _, _, _ = harness(
+            binary, shared, user, log, bounded_socket, "concurrent-status", concurrent_report
+        )
+        concurrent_body = json.load(open(concurrent_report)) if os.path.exists(concurrent_report) else {}
+        results["concurrent_management_query"] = (
+            concurrent_code == 0 and concurrent_body.get("failure_count", 1) == 0
+        )
+        status_code, status, _ = cli(".local/ac189-a3-backend", bounded_socket, "status")
+        status_body = status.get("body") or {}
+        results["fault_visible_in_status"] = (
+            status_code == 0
+            and (status_body.get("admission_refused_units", 0) >= 0)
+            and status_body.get("globally_effective") is False
+        )
+        run(
+            ["/usr/bin/python3", "-m", "archive.cli", "--root", bounded_root, "--socket", bounded_socket,
+             "collector", "stop"],
+            env=env,
+        )
+    return results
+
+
 def sigpipe_controls(binary, scratch):
     import socket as pysock
     results = {}
@@ -468,6 +616,14 @@ def contract(args):
         gate_report = os.path.join(args.root, "schema-gate.json")
         gate_code, _, gate_err, _ = harness(binary, shared, user, log, socket, "schema-gate", gate_report)
         cli(args.backend, socket, "checkpoint")
+        edge_report = os.path.join(args.root, "transition-edge.json")
+        edge_code, _, _, _ = harness(binary, shared, user, log, socket, "transition-edge", edge_report)
+        provenance_report = os.path.join(args.root, "terminal-provenance.json")
+        provenance_code, _, _, _ = harness(
+            binary, shared, user, log, socket, "terminal-provenance", provenance_report
+        )
+        relations_code, relations, relations_err = archive_relations(args.backend, socket)
+        relation_evidence = relations.get("evidence") or {}
         payload_code, rows, _ = query_payloads(args.backend, socket)
         texts = [payload_text(row) for row in rows]
         joined = "\n".join(texts)
@@ -479,6 +635,8 @@ def contract(args):
             "sensitive_absent": "甲敏" not in joined,
         }
         sig = sigpipe_controls(binary, args.scratch)
+        os.environ["AC189_BACKEND"] = args.backend
+        faults = fault_coverage(binary, args.root, args.scratch, shared, user, log)
         evidence = {
             "short_long_typing": "commit_attempt" in kinds and "input_change" in kinds,
             "backspace_retype": "replacement" in kinds,
@@ -488,7 +646,12 @@ def contract(args):
             "capture_off_on_text": body.get("failure_count", 1) == 0,
             "eligibility_exclusion": all(schema_gate.values()),
             "provenance_continuity": len({row.get("process_id") for row in observations}) > 1,
+            "raw_terminal_process_continuity": relation_evidence.get("raw_terminal_process_continuity") is True,
+            "no_unobserved_prefix_admitted": relation_evidence.get("no_unobserved_prefix_admitted") is True,
+            "eligible_content_still_recorded": relation_evidence.get("eligible_content_still_recorded") is True,
             "fault_nonblocking": all(sig.values()),
+            "held_fault_and_bounded_queue": all(faults.values()) and bool(faults),
+            "concurrent_management_query": faults.get("concurrent_management_query") is True,
             "policy_pause_restart": (status.get("body") or {}).get("legacy_switch_changed") is False,
             "five_probes": all(value == "pass" for value in probes.values()),
             "no_cwd_or_stdout_leak": body.get("cwd_unchanged") is True and not leaked,
@@ -502,7 +665,16 @@ def contract(args):
         start_collector(args.backend, root, socket)
         _, restarted, _ = cli(args.backend, socket, "status")
         evidence["policy_pause_restart"] = (restarted.get("body") or {}).get("desired_policy") == "paused"
-        passed = all(evidence.values()) and body.get("failure_count", 1) == 0 and status_code == 0 and query_code == 0 and payload_code == 0
+        passed = (
+            all(evidence.values())
+            and body.get("failure_count", 1) == 0
+            and status_code == 0
+            and query_code == 0
+            and payload_code == 0
+            and relations_code == 0
+            and edge_code == 0
+            and provenance_code == 0
+        )
         public = {
             "interface_version": INTERFACE,
             "passed": passed,
@@ -510,6 +682,14 @@ def contract(args):
             "probes": probes,
             "schema_gate": schema_gate,
             "sigpipe": sig,
+            "fault_coverage": faults,
+            "relations": relations,
+            "scenario_exits": {
+                "contract": code,
+                "schema_gate": gate_code,
+                "transition_edge": edge_code,
+                "terminal_provenance": provenance_code,
+            },
             "failure_count": body.get("failure_count", 1),
             "observation_kinds": sorted(kinds),
             "content_included": False,

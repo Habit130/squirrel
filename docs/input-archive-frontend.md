@@ -40,8 +40,23 @@ they stay an uncertainty, not a host-document interruption.
 An Input Process is one observed composition. An Observed Continuity Segment
 is cut on retarget, deactivation, schema/source change, pause/resume, known
 loss, and session recreation. A completed process is not itself a
-host-document claim. Enabling mid-composition does not backfill unobserved
-keys. An `insertText` return proves only that call, not host persistence.
+host-document claim.
+
+A composition whose prefix was never observed is never admitted later. When an
+observation with content is refused (capture not locally effective, unknown or
+unsupported schema, secure input), the composition stays excluded. It becomes
+eligible again only when an eligible observation continues the last recorded
+preedit exactly, which proves that nothing was hidden; a divergence keeps the
+composition excluded and emits a content-free exclusion notice instead. An
+empty observation is the composition boundary and ends the exclusion. So
+enabling, resuming, or recovering from a sensitive state mid-composition does
+not backfill unobserved keys, while a composition that was always observed is
+unaffected.
+
+Global finalization is observed before the session is invalidated. The raw
+terminal is recorded from the process and segment of the composition it closes,
+and the continuity cut for deactivation is applied after that observation. An
+`insertText` return proves only that call, not host persistence.
 
 Normal engine commit, raw finalization, unavailable client, and unknown
 outcome are distinct. Candidate texts are copied in the order librime already
@@ -103,7 +118,15 @@ stays `unknown` unless a compatible timestamp exists.
 The isolated check is `scripts/check-input-archive-frontend.py`. It compiles
 the production controller, panel, and librime paths with an invented
 `luna_pinyin` fixture. It is not a pure planner and it does not install a
-live input source. Stop only the collector that check started:
+live input source. Besides the contract and schema-gate scenarios it drives
+`transition-edge` (a composition that becomes eligible part way through),
+`terminal-provenance` (raw finalization through deactivation), `fault-burst`
+(a held or absent collector), and `concurrent-status` (bounded management
+queries during composition). The contract suite asserts on the persisted
+public query result, not only on observation kinds: a raw terminal that closes
+an observed composition must carry that composition's `process_id` and
+`continuity_segment_id`, and no stored payload may contain text composed while
+ineligible. Stop only the collector that check started:
 
 ```sh
 /usr/bin/python3 -m archive.cli --root "$ROOT" --socket "$SOCKET" collector stop
@@ -111,16 +134,30 @@ live input source. Stop only the collector that check started:
 
 ## Measured incremental cost
 
-Attempt 1's timing command is not certification for this repair. A new
-MEAS-189-v1 manifest is published before any attempt-2 sampling. Unavailable
-primary endpoints stay unavailable; handler return is a separate measurement.
-Backspace events must carry a character so production `handle` reaches
-`processKey`. Attempt 2 pre-run manifest SHA-256
+Attempt 1 and attempt 2 timing results are not certification for this repair.
+A new MEAS-189-v1 manifest must be published before any attempt-3 sampling.
+Unavailable primary endpoints stay unavailable; handler return is a separate
+measurement. Backspace events must carry a character so production `handle`
+reaches `processKey`. Attempt 2 pre-run manifest SHA-256
 `3137367a399865810ba01f3fb69e9be5cd2dc56c236cb8853fbd2a8a611d13ec`.
 The timing command exited 1. Every stratum had 2,000 pairs and zero
 unavailable primary endpoints. short, long, and backspace met the paired
 p95/p99 target. retype, number, space, mouse, and paging did not. That is
 not a Pass. It is not pixels, host persistence, or ranking benefit.
+
+Attempt 3 has not produced a certified timing run. Its sampling gate requires
+a naturally Secure-Input-off, confirmed quiet window, and the secure-input flag
+was observed on when the run was attempted. That is an environment blocker, not
+a Pass, a noise waiver, or a relaxed threshold. The frozen target is unchanged:
+per-stratum paired p95 <= 1 ms and p99 <= 3 ms including the whole
+handler/action return, with the predeclared strata, warm-up, sample, and block
+rules.
+
+Attempt 2 overwrote two files under the original `.local/ac189-timing` root
+while a fresh root was allocated for that attempt. Those original identities
+cannot be restored, so the frozen preservation criterion stays a Fail for this
+delivery regardless of later repairs. The disclosed current bytes and modes are
+left as they are.
 
 ## Limits
 

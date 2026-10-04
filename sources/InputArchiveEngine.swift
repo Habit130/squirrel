@@ -12,22 +12,24 @@ import Foundation
 final class InputArchiveEngine {
   static let shared = InputArchiveEngine()
 
-  private let lock = NSLock()
-  private let producer = InputArchiveProducer()
+  let lock = NSLock()
+  let producer = InputArchiveProducer()
   private var sequence = 0
-  private var processId = InputArchiveTokens.fresh("proc")
-  private var segmentId = InputArchiveTokens.fresh("seg")
-  private var updateId = ""
-  private var parentUpdateId: String?
-  private var processOpen = false
-  private var associationValid = false
+  var processId = InputArchiveTokens.fresh("proc")
+  var segmentId = InputArchiveTokens.fresh("seg")
+  var updateId = ""
+  var parentUpdateId: String?
+  var processOpen = false
+  var associationValid = false
   private var pendingOperation = "key_update"
   private var configuredSocket = ""
-  private var measurementSuppressed = false
+  var measurementSuppressed = false
   private var lastCaptureEnabled = false
-  private var lastPreedit = ""
-  private var lastInputLength = 0
-  private var timing = InputArchiveTiming()
+  var lastPreedit = ""
+  var lastInputLength = 0
+  var lastRecordedPreedit = ""
+  var compositionUnobserved = false
+  var timing = InputArchiveTiming()
   private var metadataPublishedBeforeEngine = false
 
   private init() {}
@@ -126,48 +128,18 @@ final class InputArchiveEngine {
       processId = InputArchiveTokens.fresh("proc")
       lastPreedit = ""
       lastInputLength = 0
+      lastRecordedPreedit = ""
+      compositionUnobserved = false
     }
     lock.unlock()
-  }
-
-  func recordCommit(_ text: String, schema: String) {
-    admitTerminal(
-      kind: "commit_attempt",
-      outcome: "observed_attempt",
-      text: String(text),
-      schema: schema,
-      clientPresent: true
-    )
-  }
-
-  func recordRaw(_ text: String, schema: String) {
-    admitTerminal(
-      kind: "raw_finalization",
-      outcome: "raw_finalized",
-      text: String(text),
-      schema: schema,
-      clientPresent: true
-    )
-  }
-
-  func recordUnavailable(schema: String) {
-    admitTerminal(kind: "unavailable_client", outcome: "unavailable_client", text: nil, schema: schema, clientPresent: false)
-  }
-
-  func recordCancellation(schema: String) {
-    admitTerminal(kind: "cancellation", outcome: "cancelled", text: nil, schema: schema, clientPresent: true)
-  }
-
-  // periphery:ignore
-  func recordUnknown(schema: String) {
-    admitTerminal(kind: "unknown_outcome", outcome: "unknown", text: nil, schema: schema, clientPresent: true)
   }
 
   func observe(_ snapshot: InputArchiveSnapshot) {
     notePolicyEdge()
     let started = InputArchiveClock.now()
-    let owned = OwnedPage(snapshot)
+    let owned = InputArchiveOwnedPage(snapshot)
     let copyNs = InputArchiveClock.nanoseconds(from: InputArchiveClock.now() &- started)
+    let hasContent = !owned.preedit.isEmpty || owned.inputLength > 0 || !owned.candidates.isEmpty
     lock.lock()
     timing.copyNs &+= copyNs
     let operation = pendingOperation
@@ -175,17 +147,46 @@ final class InputArchiveEngine {
     let previousLength = lastInputLength
     lastPreedit = owned.preedit
     lastInputLength = owned.inputLength
+    // An empty observation is the empty/terminal boundary of any composition. A
+    // composition whose earlier prefix was never observed stops excluding here,
+    // and this boundary is reached before any early return below.
+    if !hasContent {
+      compositionUnobserved = false
+      lastRecordedPreedit = ""
+    }
     lock.unlock()
-    if owned.preedit.isEmpty && owned.candidates.isEmpty && operation != "escape" && !processOpen {
+    if !hasContent && operation != "escape" && !processOpen {
       return
     }
     if !mayAdmit(schema: owned.schemaId, clientPresent: owned.clientPresent) {
+      // Opt-out, pause, ineligibility or an excluded/unsupported schema. The
+      // content of this observation was not recorded, so the composition may
+      // carry a prefix that was never observed. It stays excluded unless the
+      // next eligible observation continues the recorded prefix exactly, which
+      // proves nothing was hidden (E2/E3 no-backfill).
+      if hasContent {
+        markCompositionUnobserved()
+      }
       if shouldExclude(schema: owned.schemaId) {
         admitExclusion()
       }
       return
     }
-    if !processOpen && (!owned.preedit.isEmpty || owned.inputLength > 0 || !owned.candidates.isEmpty) {
+    lock.lock()
+    let unobserved = compositionUnobserved
+    let recorded = lastRecordedPreedit
+    lock.unlock()
+    // `recorded` is the last preedit this engine actually admitted for the
+    // composition. An eligible continuation keeps it as a prefix; a divergence
+    // means text was produced while this frontend could not observe it.
+    if unobserved && !(recorded.isEmpty ? owned.preedit.isEmpty : owned.preedit.hasPrefix(recorded)) {
+      admitExclusion()
+      return
+    }
+    lock.lock()
+    compositionUnobserved = false
+    lock.unlock()
+    if !processOpen && hasContent {
       openProcess()
     }
     let kind = classify(
@@ -223,6 +224,7 @@ final class InputArchiveEngine {
     status["process_id"] = processId
     status["association"] = associationValid ? "valid" : "invalid"
     status["metadata_before_engine"] = metadataPublishedBeforeEngine ? "true" : "false"
+    status["composition_unobserved"] = compositionUnobserved ? "true" : "false"
     status["endpoint"] = timing.endpoint
     status["action"] = timing.action
     status["legacy_selection_recording"] = "separately_configured_may_continue"
@@ -253,6 +255,11 @@ final class InputArchiveEngine {
     lock.lock()
     let changed = enabled != lastCaptureEnabled
     lastCaptureEnabled = enabled
+    // Losing capture eligibility mid-composition makes that composition's
+    // earlier prefix unobserved for the new segment.
+    if changed && !enabled {
+      compositionUnobserved = true
+    }
     lock.unlock()
     if changed {
       noteContinuityCut(enabled ? "resume" : "pause")
@@ -294,7 +301,7 @@ final class InputArchiveEngine {
     _ = admit(fields)
   }
 
-  private func admitPage(kind: String, outcome: String, page: OwnedPage, operation: String) {
+  private func admitPage(kind: String, outcome: String, page: InputArchiveOwnedPage, operation: String) {
     lock.lock()
     let process = processId
     let segment = segmentId
@@ -303,6 +310,7 @@ final class InputArchiveEngine {
     parentUpdateId = update
     updateId = update
     associationValid = true
+    lastRecordedPreedit = page.preedit
     lock.unlock()
     var fields = baseFields(kind: kind, outcome: outcome, process: process, segment: segment)
     fields["update_id"] = update
@@ -315,80 +323,8 @@ final class InputArchiveEngine {
     _ = admit(fields)
   }
 
-  private func admitTerminal(kind: String, outcome: String, text: String?, schema: String, clientPresent: Bool) {
-    if !clientPresent && kind != "unavailable_client" {
-      return
-    }
-    if measurementSuppressed {
-      return
-    }
-    if !producer.captureEnabled() && kind != "unavailable_client" {
-      return
-    }
-    if kind != "unavailable_client" && InputArchiveSignals.secureEventInputEnabled() {
-      admitExclusion()
-      return
-    }
-    // Cached or hard-coded Luna identity is not proof. Unknown and other schemas exclude without text.
-    if kind != "unavailable_client" && schema != InputArchive.supportedSchema {
-      admitExclusion()
-      return
-    }
-    lock.lock()
-    if !processOpen {
-      processId = InputArchiveTokens.fresh("proc")
-    }
-    let process = processId
-    let segment = segmentId
-    let update = InputArchiveTokens.fresh("upd")
-    let parent = parentUpdateId
-    let commitId = InputArchiveTokens.fresh("cmt")
-    processOpen = false
-    associationValid = false
-    lastPreedit = ""
-    lastInputLength = 0
-    parentUpdateId = nil
-    updateId = ""
-    lock.unlock()
-    var fields = baseFields(kind: kind, outcome: outcome, process: process, segment: segment)
-    fields["update_id"] = update
-    fields["commit_id"] = commitId
-    if let parent {
-      fields["parent_update_id"] = parent
-    }
-    fields["stage"] = "frontend_commit_call"
-    fields["host_persistence"] = "unknown"
-    if let text, kind != "unavailable_client" {
-      fields["payload"] = [
-        "text": text,
-        "operation": kind,
-        "host_persistence": "unknown",
-        "clock_domain": "mach_absolute_time"
-      ]
-    } else {
-      fields["payload"] = [
-        "operation": kind,
-        "host_persistence": "unknown",
-        "client_present": clientPresent
-      ]
-    }
-    _ = admit(fields)
-  }
 
-  private func admitExclusion() {
-    lock.lock()
-    let process = processId
-    let segment = segmentId
-    lock.unlock()
-    var fields = baseFields(kind: "exclusion_notice", outcome: "unknown", process: process, segment: segment)
-    fields["eligibility"] = "excluded"
-    fields["reason"] = "deliberate_exclusion"
-    fields["schema_id"] = "unknown"
-    fields["payload"] = NSNull()
-    _ = admit(fields)
-  }
-
-  private func admit(_ fields: [String: Any]) -> InputArchiveAdmission {
+  func admit(_ fields: [String: Any]) -> InputArchiveAdmission {
     let started = InputArchiveClock.now()
     let result = producer.admit(fields)
     let elapsed = InputArchiveClock.nanoseconds(from: InputArchiveClock.now() &- started)
@@ -402,7 +338,7 @@ final class InputArchiveEngine {
     return result
   }
 
-  private func baseFields(kind: String, outcome: String, process: String, segment: String) -> [String: Any] {
+  func baseFields(kind: String, outcome: String, process: String, segment: String) -> [String: Any] {
     [
       "envelope_version": InputArchive.envelopeVersion,
       "content_version": InputArchive.contentVersion,
@@ -429,7 +365,7 @@ final class InputArchiveEngine {
     return sequence
   }
 
-  private func classify(operation: String, previous: String, previousLength: Int, current: OwnedPage) -> String {
+  private func classify(operation: String, previous: String, previousLength: Int, current: InputArchiveOwnedPage) -> String {
     if operation == "escape" && current.preedit.isEmpty {
       return "cancellation"
     }
@@ -454,56 +390,5 @@ final class InputArchiveEngine {
   private static func queueWait(_ timestamp: TimeInterval?) -> String {
     guard let timestamp, timestamp > 1 else { return "unknown" }
     return "unknown"
-  }
-}
-
-private struct OwnedPage {
-  var schemaId: String
-  var preedit: String
-  var candidates: [String]
-  var comments: [String]
-  var highlighted: Int
-  var page: Int
-  var lastPage: Bool
-  var caretUTF16: Int
-  var inputLength: Int
-  var application: String
-  var clientPresent: Bool
-
-  init(_ snapshot: InputArchiveSnapshot) {
-    schemaId = String(snapshot.schemaId)
-    preedit = String(snapshot.preedit)
-    candidates = snapshot.candidates.map { String($0) }
-    comments = snapshot.comments.map { String($0) }
-    highlighted = snapshot.highlighted
-    page = snapshot.page
-    lastPage = snapshot.lastPage
-    caretUTF16 = snapshot.caretUTF16
-    inputLength = snapshot.inputLength
-    application = String(snapshot.application)
-    clientPresent = snapshot.clientPresent
-  }
-
-  func payload(operation: String, timing: InputArchiveTiming) -> [String: Any] {
-    [
-      "text": preedit,
-      "preedit": preedit,
-      "candidates": candidates,
-      "comments": comments,
-      "highlighted": highlighted,
-      "page": page,
-      "last_page": lastPage,
-      "caret_utf16": caretUTF16,
-      "input_length": inputLength,
-      "application": InputArchiveTokens.token(application, fallback: "unknown_app"),
-      "operation": operation,
-      "candidate_order": "frontend_page_as_received",
-      "host_persistence": "unknown",
-      "clock_domain": timing.clockDomain,
-      "endpoint": timing.endpoint,
-      "event_queue_wait": timing.eventQueueWait,
-      "timebase_numer": Int(InputArchiveClock.timebase.numer),
-      "timebase_denom": Int(InputArchiveClock.timebase.denom)
-    ]
   }
 }

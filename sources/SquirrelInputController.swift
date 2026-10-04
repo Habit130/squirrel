@@ -209,9 +209,12 @@ final class SquirrelInputController: IMKInputController {
   }
 
   override func deactivateServer(_ sender: Any!) {
-    InputArchiveEngine.shared.noteContinuityCut("deactivation")
     hidePalettes()
+    // Global finalization observes its terminal outcome before the continuity
+    // cut, so the stored terminal keeps the process/segment of the observed
+    // composition it closes.
     commitComposition(sender)
+    InputArchiveEngine.shared.noteContinuityCut("deactivation")
     client = nil
     InputArchiveEngine.shared.invalidateMetadata()
   }
@@ -266,20 +269,25 @@ final class SquirrelInputController: IMKInputController {
     InputArchiveEngine.shared.beginAction("raw_finalization", eventTimestamp: nil)
     defer { InputArchiveEngine.shared.finishAction() }
     publishArchiveMetadata()
-    if session != 0 {
-      if let input = rimeAPI.get_input(session) {
-        let owned = String(cString: input)
-        let hadClient = client != nil
-        commit(string: owned)
-        let operationSchema = currentOperationSchema()
-        if hadClient {
-          InputArchiveEngine.shared.recordRaw(owned, schema: operationSchema)
-        } else {
-          InputArchiveEngine.shared.recordUnavailable(schema: operationSchema)
-        }
-        rimeAPI.clear_composition(session)
+    guard session != 0 else { return }
+    let operationSchema = currentOperationSchema()
+    let input = rimeAPI.get_input(session).map { String(cString: $0) }
+    let hadClient = client != nil
+    if let owned = input {
+      commit(string: owned)
+      if hadClient {
+        InputArchiveEngine.shared.recordRaw(owned, schema: operationSchema)
+      } else {
+        InputArchiveEngine.shared.recordUnavailable(schema: operationSchema)
       }
+    } else if hadClient {
+      // Global finalization precedes session invalidation: an observed insertion
+      // with no readable engine input still records its terminal outcome.
+      InputArchiveEngine.shared.recordRaw("", schema: operationSchema)
+    } else {
+      InputArchiveEngine.shared.recordUnavailable(schema: operationSchema)
     }
+    rimeAPI.clear_composition(session)
   }
 
   override func menu() -> NSMenu! {
