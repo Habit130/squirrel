@@ -7,6 +7,7 @@
 //
 
 import Carbon
+import Darwin
 import Foundation
 
 enum InputArchive {
@@ -112,32 +113,44 @@ enum InputArchiveTokens {
 
 enum InputArchivePaths {
   static func refusal(for socketPath: String) -> String? {
-    if !socketPath.hasPrefix("/") {
+    if !socketPath.hasPrefix("/") || socketPath.contains("\0") {
       return "invalid_request"
     }
     if socketPath.utf8.count > InputArchive.sunPathLimit {
       return "invalid_request"
     }
-    let parts = socketPath.split(separator: "/").map(String.init)
-    for part in parts where InputArchive.synchronizedPathParts.contains(part) {
+    let parts = socketPath.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+    if parts.contains("..") {
+      return "invalid_request"
+    }
+    if parts.contains(where: InputArchive.synchronizedPathParts.contains) {
       return "unsafe_root"
     }
-    var isDirectory: ObjCBool = false
-    let parent = (socketPath as NSString).deletingLastPathComponent
-    if !parent.isEmpty {
-      let exists = FileManager.default.fileExists(atPath: parent, isDirectory: &isDirectory)
-      if exists {
-        let parentURL = URL(fileURLWithPath: parent)
-        if let values = try? parentURL.resourceValues(forKeys: [.isSymbolicLinkKey]),
-           values.isSymbolicLink == true {
-          return "unsafe_root"
-        }
+
+    var current = "/"
+    for (index, part) in parts.enumerated() {
+      if part == "." {
+        continue
       }
-    }
-    let url = URL(fileURLWithPath: socketPath)
-    if FileManager.default.fileExists(atPath: socketPath) {
-      if let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .isAliasFileKey]),
-         values.isSymbolicLink == true || values.isAliasFile == true {
+      current = current == "/" ? current + part : current + "/" + part
+      var info = stat()
+      let result = current.withCString { lstat($0, &info) }
+      if result != 0 {
+        if errno == ENOENT {
+          break
+        }
+        return "unsafe_root"
+      }
+      let fileType = info.st_mode & mode_t(S_IFMT)
+      if fileType == mode_t(S_IFLNK) {
+        return "unsafe_root"
+      }
+      if index < parts.count - 1 && fileType != mode_t(S_IFDIR) {
+        return "invalid_request"
+      }
+      let url = URL(fileURLWithPath: current)
+      if let values = try? url.resourceValues(forKeys: [.isAliasFileKey]),
+         values.isAliasFile == true {
         return "unsafe_root"
       }
     }

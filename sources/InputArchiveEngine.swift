@@ -42,7 +42,18 @@ final class InputArchiveEngine {
   // periphery:ignore
   func bind(socket: String) {
     lock.lock()
+    let changed = configuredSocket != socket
     configuredSocket = socket
+    if changed {
+      segmentId = InputArchiveTokens.fresh("seg")
+      associationValid = false
+      updateId = ""
+      parentUpdateId = nil
+      lastCaptureEnabled = false
+      if processOpen {
+        compositionUnobserved = true
+      }
+    }
     lock.unlock()
     if InputArchivePaths.refusal(for: socket) != nil && !socket.isEmpty {
       producer.bind(socketPath: "")
@@ -219,6 +230,7 @@ final class InputArchiveEngine {
     status["measurement_suppressed"] = measurementSuppressed ? "true" : "false"
     status["segment_id"] = segmentId
     status["process_id"] = processId
+    status["source_local_sequence"] = String(sequence)
     status["association"] = associationValid ? "valid" : "invalid"
     status["metadata_before_engine"] = metadataPublishedBeforeEngine ? "true" : "false"
     status["composition_unobserved"] = compositionUnobserved ? "true" : "false"

@@ -11,14 +11,22 @@ import Darwin
 import Foundation
 
 final class InputArchiveProducer {
+  private static let maxSendAttempts = 3
+  private static let maxPendingLosses = 64
+
   private let lock = NSLock()
+  private let transportCall: (String, String, [String: Any]) -> [String: Any]
+  private let beforeDrain: () -> Void
   private var socketPath = ""
+  private var bindingGeneration: UInt64 = 0
   private var sourceInstanceId: String
   private var queue: [QueuedObservation] = []
   private var queuedBytes = 0
+  private var inFlight = 0
   private var knownRefused = 0
   private var knownDropped = 0
-  private var localLosses: [[String: Any]] = []
+  private var unreportedLossNotices = 0
+  private var localLosses: [QueuedObservation] = []
   private var observedRevision: Int?
   private var observedDesired: String?
   private var observedAt: UInt64?
@@ -28,7 +36,14 @@ final class InputArchiveProducer {
   private var sender: Thread?
   private var workingDirectoryAtStart = FileManager.default.currentDirectoryPath
 
-  init() {
+  init(
+    transportCall: @escaping (String, String, [String: Any]) -> [String: Any] = { socketPath, op, body in
+      InputArchiveSocket.call(socketPath: socketPath, op: op, body: body)
+    },
+    beforeDrain: @escaping () -> Void = {}
+  ) {
+    self.transportCall = transportCall
+    self.beforeDrain = beforeDrain
     sourceInstanceId = InputArchiveTokens.fresh("src")
   }
 
@@ -43,6 +58,12 @@ final class InputArchiveProducer {
     let changed = socketPath != self.socketPath
     self.socketPath = socketPath
     if changed {
+      bindingGeneration &+= 1
+      knownDropped += queue.filter { $0.kind != "loss_notice" }.count
+      unreportedLossNotices += queue.count + localLosses.count
+      queue.removeAll(keepingCapacity: true)
+      queuedBytes = 0
+      localLosses.removeAll(keepingCapacity: true)
       observedRevision = nil
       observedDesired = nil
       observedAt = nil
@@ -76,11 +97,13 @@ final class InputArchiveProducer {
       "source_instance_id": sourceInstanceId,
       "observed_revision": observedRevision.map(String.init) ?? "unknown",
       "observed_desired": observedDesired ?? "unknown",
+      "binding_generation": String(bindingGeneration),
       "fresh": cacheFreshLocked(now: InputArchiveClock.now()) ? "true" : "false",
       "collector_unavailable": collectorUnavailable ? "true" : "false",
       "queued": String(queue.count),
       "known_refused": String(knownRefused),
       "known_dropped": String(knownDropped),
+      "unreported_loss_notices": String(unreportedLossNotices),
       "cwd_changed": FileManager.default.currentDirectoryPath == workingDirectoryAtStart ? "false" : "true",
       "content_included": "false"
     ]
@@ -96,7 +119,7 @@ final class InputArchiveProducer {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
       lock.lock()
-      let empty = queue.isEmpty && localLosses.isEmpty
+      let empty = queue.isEmpty && localLosses.isEmpty && inFlight == 0
       lock.unlock()
       if empty {
         return true
@@ -132,18 +155,19 @@ final class InputArchiveProducer {
     if kind != "loss_notice" && schema != InputArchive.supportedSchema && schema != "unknown" {
       return InputArchiveAdmission.refused("unsupported_schema")
     }
-    let now = InputArchiveClock.now()
     lock.lock()
-    let fresh = cacheFreshLocked(now: now)
+    defer { lock.unlock() }
+    let fresh = cacheFreshLocked(now: InputArchiveClock.now())
     let desired = observedDesired
-    lock.unlock()
-    if !fresh || desired != "enabled" {
+    guard fresh && desired == "enabled" else {
       let code = fresh && (desired == "off" || desired == "paused") ? "capture_disabled" : "policy_not_effective"
       return InputArchiveAdmission.refused(code)
     }
-    return enqueue(snapshot, kind: kind ?? "unknown_outcome", size: size)
+    return enqueueLocked(snapshot, kind: kind ?? "unknown_outcome", size: size)
   }
+}
 
+extension InputArchiveProducer {
   private func startSender() {
     let thread = Thread { [weak self] in
       self?.senderLoop()
@@ -158,16 +182,21 @@ final class InputArchiveProducer {
   private func senderLoop() {
     while !isStopped {
       pollPolicy()
+      beforeDrain()
       let drained = drain(limit: InputArchive.batchSize)
+      var retryPending = false
       if !drained.losses.isEmpty {
-        _ = send(observations: drained.losses)
+        let outcomes = send(items: drained.losses)
+        retryPending = finishDelivery(drained.losses, outcomes: outcomes, isLossBatch: true)
       }
-      if drained.batch.isEmpty {
+      if !drained.batch.isEmpty {
+        let outcomes = send(items: drained.batch)
+        retryPending = finishDelivery(drained.batch, outcomes: outcomes, isLossBatch: false) || retryPending
+      }
+      if retryPending {
+        Thread.sleep(forTimeInterval: 0.05)
+      } else if drained.batch.isEmpty && drained.losses.isEmpty {
         Thread.sleep(forTimeInterval: 0.01)
-        continue
-      }
-      if !send(observations: drained.batch.map(\.snapshot)) {
-        requeue(drained.batch)
       }
     }
   }
@@ -207,10 +236,22 @@ final class InputArchiveProducer {
   }
 
   private func enqueue(_ snapshot: [String: Any], kind: String, size: Int) -> InputArchiveAdmission {
-    let priority = highPriority(kind) ? "high" : "low"
     lock.lock()
     defer { lock.unlock() }
-    let item = QueuedObservation(kind: kind, priority: priority, snapshot: snapshot, size: size)
+    return enqueueLocked(snapshot, kind: kind, size: size)
+  }
+
+  private func enqueueLocked(_ snapshot: [String: Any], kind: String, size: Int) -> InputArchiveAdmission {
+    let priority = highPriority(kind) ? "high" : "low"
+    let item = QueuedObservation(
+      kind: kind,
+      priority: priority,
+      snapshot: snapshot,
+      size: size,
+      socketPath: socketPath,
+      bindingGeneration: bindingGeneration,
+      attempts: 0
+    )
     if fitsLocked(size) {
       queue.append(item)
       queuedBytes += size
@@ -241,53 +282,123 @@ final class InputArchiveProducer {
   }
 
   private func rememberLossLocked(_ item: QueuedObservation, reason: String) {
-    localLosses.append([
+    guard item.kind != "loss_notice",
+          item.socketPath == socketPath,
+          item.bindingGeneration == bindingGeneration else {
+      unreportedLossNotices += 1
+      return
+    }
+    guard localLosses.count < Self.maxPendingLosses else {
+      unreportedLossNotices += 1
+      knownRefused += 1
+      return
+    }
+    var notice: [String: Any] = [
       "observation_kind": "loss_notice",
       "source_instance_id": item.snapshot["source_instance_id"] ?? sourceInstanceId,
       "source_local_sequence": item.snapshot["source_local_sequence"] ?? 0,
       "process_id": item.snapshot["process_id"] ?? "unknown",
-      "dropped_kind": item.kind,
-      "reason": reason,
       "payload": NSNull(),
       "schema_id": "unknown",
       "envelope_version": InputArchive.envelopeVersion,
       "content_version": InputArchive.contentVersion
-    ])
-    if localLosses.count > 64 {
-      localLosses = Array(localLosses.suffix(64))
+    ]
+    if let knownReason = Self.lossReason(reason) {
+      notice["reason"] = knownReason
     }
+    let size = budgetBytes(notice)
+    localLosses.append(QueuedObservation(
+      kind: "loss_notice",
+      priority: "high",
+      snapshot: notice,
+      size: size,
+      socketPath: socketPath,
+      bindingGeneration: bindingGeneration,
+      attempts: 0
+    ))
   }
 
-  private func drain(limit: Int) -> (batch: [QueuedObservation], losses: [[String: Any]]) {
+  private func drain(limit: Int) -> (batch: [QueuedObservation], losses: [QueuedObservation]) {
     lock.lock()
     defer { lock.unlock() }
     let count = min(limit, queue.count)
     let batch = Array(queue.prefix(count))
     queue.removeFirst(count)
     queuedBytes -= batch.reduce(0) { $0 + $1.size }
-    let losses = localLosses
-    localLosses = []
+    let lossCount = min(limit, localLosses.count)
+    let losses = Array(localLosses.prefix(lossCount))
+    localLosses.removeFirst(lossCount)
+    inFlight += batch.count + losses.count
     return (batch, losses)
   }
 
-  private func requeue(_ items: [QueuedObservation]) {
+  private func finishDelivery(
+    _ items: [QueuedObservation],
+    outcomes: [DeliveryOutcome],
+    isLossBatch: Bool
+  ) -> Bool {
     lock.lock()
     defer { lock.unlock() }
-    for item in items.reversed() {
-      if fitsLocked(item.size) {
+    inFlight = max(0, inFlight - items.count)
+    var retries: [QueuedObservation] = []
+    for (item, outcome) in zip(items, outcomes) {
+      let isLoss = isLossBatch || item.kind == "loss_notice"
+      switch outcome {
+      case .accepted:
+        break
+      case .retryable(let reason):
+        if item.attempts + 1 < Self.maxSendAttempts,
+           item.socketPath == socketPath,
+           item.bindingGeneration == bindingGeneration {
+          var retry = item
+          retry.attempts += 1
+          retries.append(retry)
+        } else {
+          recordFailedDeliveryLocked(item, reason: reason, isLossNotice: isLoss)
+        }
+      case .refused(let reason):
+        recordFailedDeliveryLocked(item, reason: reason, isLossNotice: isLoss)
+      }
+    }
+    for item in retries.reversed() {
+      if item.kind == "loss_notice" {
+        if localLosses.count < Self.maxPendingLosses {
+          localLosses.insert(item, at: 0)
+        } else {
+          unreportedLossNotices += 1
+          knownRefused += 1
+        }
+      } else if fitsLocked(item.size) {
         queue.insert(item, at: 0)
         queuedBytes += item.size
       } else {
         knownDropped += 1
+        knownRefused += 1
         rememberLossLocked(item, reason: "requeue_saturated")
       }
     }
+    return !retries.isEmpty
   }
 
+  private func recordFailedDeliveryLocked(_ item: QueuedObservation, reason: String, isLossNotice: Bool) {
+    knownRefused += 1
+    if isLossNotice {
+      unreportedLossNotices += 1
+      return
+    }
+    knownDropped += 1
+    if reason != "identity_conflict" {
+      rememberLossLocked(item, reason: reason)
+    }
+  }
+}
+
+extension InputArchiveProducer {
   private func pollPolicy() {
     let now = InputArchiveClock.now()
     lock.lock()
     let path = socketPath
+    let generation = bindingGeneration
     let revision = observedRevision
     let source = sourceInstanceId
     if let lastPoll {
@@ -304,64 +415,92 @@ final class InputArchiveProducer {
     if let revision {
       body["observed_revision"] = revision
     }
-    let response = InputArchiveSocket.call(socketPath: path, op: "policy_observe", body: body)
+    let response = transportCall(path, "policy_observe", body)
     lock.lock()
+    guard generation == bindingGeneration && path == socketPath else {
+      lock.unlock()
+      return
+    }
     if response["ok"] as? Bool != true {
       collectorUnavailable = true
       lock.unlock()
       return
     }
-    let responseBody = response["body"] as? [String: Any] ?? [:]
-    collectorUnavailable = false
-    if let revision = responseBody["desired_revision"] as? Int {
-      observedRevision = revision
+    guard let responseBody = response["body"] as? [String: Any],
+          let nextRevision = responseBody["desired_revision"] as? Int,
+          nextRevision >= 0,
+          let desired = responseBody["desired_policy"] as? String,
+          ["off", "enabled", "paused"].contains(desired) else {
+      observedRevision = nil
+      observedDesired = nil
+      observedAt = nil
+      collectorUnavailable = true
+      lock.unlock()
+      return
     }
-    observedDesired = responseBody["desired_policy"] as? String
+    collectorUnavailable = false
+    observedRevision = nextRevision
+    observedDesired = desired
     observedAt = InputArchiveClock.now()
     lock.unlock()
   }
 
-  private func send(observations: [[String: Any]]) -> Bool {
-    lock.lock()
-    let path = socketPath
-    lock.unlock()
-    guard !path.isEmpty else { return false }
-    let response = InputArchiveSocket.call(
-      socketPath: path,
-      op: "admit_batch",
-      body: ["observations": observations]
-    )
-    if response["ok"] as? Bool != true {
-      let code = (response["error"] as? [String: Any])?["code"] as? String
-      if code == "collector_unavailable" {
-        lock.lock()
-        collectorUnavailable = true
-        lock.unlock()
-        return false
-      }
+  private func send(items: [QueuedObservation]) -> [DeliveryOutcome] {
+    guard let first = items.first else { return [] }
+    guard !first.socketPath.isEmpty,
+          items.allSatisfy({
+            $0.socketPath == first.socketPath && $0.bindingGeneration == first.bindingGeneration
+          }) else {
+      return items.map { _ in .retryable("invalid_response") }
     }
-    noteUnaccounted(response, count: observations.count)
-    return true
+    let response = transportCall(first.socketPath, "admit_batch", ["observations": items.map(\.snapshot)])
+    if response["ok"] as? Bool != true {
+      let error = response["error"] as? [String: Any] ?? [:]
+      let code = error["code"] as? String ?? "invalid_response"
+      lock.lock()
+      if first.bindingGeneration == bindingGeneration {
+        collectorUnavailable = code == "collector_unavailable"
+      }
+      lock.unlock()
+      let retryable = (error["retryable"] as? Bool == true)
+        || code == "collector_unavailable"
+        || code == "invalid_response"
+      return items.map { _ in retryable ? .retryable(code) : .refused(code) }
+    }
+    guard let codes = (response["body"] as? [String: Any])?["codes"] as? [String],
+          codes.count == items.count,
+          codes.allSatisfy(Self.accounted.contains) else {
+      return items.map { _ in .retryable("invalid_response") }
+    }
+    lock.lock()
+    if first.bindingGeneration == bindingGeneration {
+      collectorUnavailable = false
+    }
+    lock.unlock()
+    return codes.map { code in
+      if code == "admitted" || code == "duplicate" || code == "excluded" {
+        return .accepted
+      }
+      if code == "queue_saturated" || code == "storage_failure" {
+        return .retryable(code)
+      }
+      return .refused(code)
+    }
   }
 
-  private func noteUnaccounted(_ response: [String: Any], count: Int) {
-    let codes = (response["body"] as? [String: Any])?["codes"] as? [String]
-    guard let codes else {
-      lock.lock()
-      knownRefused += count
-      lock.unlock()
-      return
-    }
-    var unaccounted = max(0, count - codes.count)
-    for code in codes where !Self.accounted.contains(code) {
-      unaccounted += 1
-    }
-    if unaccounted > 0 {
-      lock.lock()
-      knownRefused += unaccounted
-      lock.unlock()
-    }
+  private static func lossReason(_ code: String) -> String? {
+    let reasons: Set<String> = [
+      "queue_saturated", "displaced_for_priority", "storage_failure",
+      "capacity_stop", "requeue_saturated", "collector_queue_saturated"
+    ]
+    return reasons.contains(code) ? code : nil
   }
+
+  private static let accounted: Set<String> = [
+    "admitted", "duplicate", "identity_conflict", "queue_saturated", "capture_disabled",
+    "capacity_stop", "storage_failure", "event_too_large", "unsupported_version",
+    "unsupported_schema", "invalid_request", "excluded"
+  ]
 
   private func highPriority(_ kind: String) -> Bool {
     [
@@ -408,11 +547,6 @@ final class InputArchiveProducer {
     }
   }
 
-  private static let accounted: Set<String> = [
-    "admitted", "duplicate", "identity_conflict", "queue_saturated", "capture_disabled",
-    "capacity_stop", "storage_failure", "event_too_large", "unsupported_version",
-    "unsupported_schema", "invalid_request", "excluded"
-  ]
 }
 
 private struct QueuedObservation {
@@ -420,6 +554,15 @@ private struct QueuedObservation {
   var priority: String
   var snapshot: [String: Any]
   var size: Int
+  var socketPath: String
+  var bindingGeneration: UInt64
+  var attempts: Int
+}
+
+private enum DeliveryOutcome {
+  case accepted
+  case retryable(String)
+  case refused(String)
 }
 
 enum InputArchiveSocket {
@@ -427,12 +570,13 @@ enum InputArchiveSocket {
     if let refusal = InputArchivePaths.refusal(for: socketPath) {
       return failure(op: op, code: refusal)
     }
+    let requestId = InputArchiveTokens.fresh("req")
     let request: [String: Any] = [
       "interface_version": InputArchive.interfaceVersion,
       "envelope_version": InputArchive.envelopeVersion,
       "content_version": InputArchive.contentVersion,
       "op": op,
-      "request_id": InputArchiveTokens.fresh("req"),
+      "request_id": requestId,
       "body": body
     ]
     guard let frame = encodeFrame(request) else {
@@ -458,6 +602,9 @@ enum InputArchiveSocket {
     if object["interface_version"] as? String != InputArchive.interfaceVersion
         || object["envelope_version"] as? Int != InputArchive.envelopeVersion {
       return failure(op: op, code: "unsupported_version")
+    }
+    if object["op"] as? String != op || object["request_id"] as? String != requestId {
+      return failure(op: op, code: "invalid_response")
     }
     return object
   }
@@ -585,9 +732,9 @@ enum InputArchiveSocket {
       "op": op,
       "ok": false,
       "error": [
-        "code": code,
-        "message": "content-free",
-        "retryable": false,
+      "code": code,
+      "message": "content-free",
+      "retryable": code == "collector_unavailable" || code == "invalid_response",
         "content_included": false
       ],
       "content_included": false

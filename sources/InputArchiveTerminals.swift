@@ -45,22 +45,25 @@ extension InputArchiveEngine {
 
   func admitTerminal(kind: String, outcome: String, text: String?, schema: String, clientPresent: Bool) {
     if !clientPresent && kind != "unavailable_client" {
+      closeExcludedComposition()
       return
     }
     if measurementSuppressed {
+      closeExcludedComposition()
       return
     }
     if !producer.captureEnabled() && kind != "unavailable_client" {
+      closeExcludedComposition()
       return
     }
     if kind != "unavailable_client" && InputArchiveSignals.secureEventInputEnabled() {
-      markCompositionUnobserved()
+      closeExcludedComposition()
       admitExclusion()
       return
     }
     // Cached or hard-coded Luna identity is not proof. Unknown and other schemas exclude without text.
     if kind != "unavailable_client" && schema != InputArchive.supportedSchema {
-      markCompositionUnobserved()
+      closeExcludedComposition()
       admitExclusion()
       return
     }
@@ -68,18 +71,9 @@ extension InputArchiveEngine {
     if kind != "unavailable_client" && compositionUnobserved {
       // The composition that this terminal closes was never observed from its
       // start, so its text is not eligible. The observed terminal outcome is
-      // still reported as a content-free exclusion notice. The process is
-      // closed here so the next eligible composition opens its own process
-      // instead of inheriting this one's update chain.
-      processOpen = false
-      associationValid = false
-      lastPreedit = ""
-      lastInputLength = 0
-      lastRecordedPreedit = ""
-      compositionUnobserved = false
-      parentUpdateId = nil
-      updateId = ""
+      // still reported as a content-free exclusion notice.
       lock.unlock()
+      closeExcludedComposition()
       admitExclusion()
       return
     }
@@ -144,6 +138,19 @@ extension InputArchiveEngine {
   func markCompositionUnobserved() {
     lock.lock()
     compositionUnobserved = true
+    lock.unlock()
+  }
+
+  private func closeExcludedComposition() {
+    lock.lock()
+    processOpen = false
+    associationValid = false
+    lastPreedit = ""
+    lastInputLength = 0
+    lastRecordedPreedit = ""
+    compositionUnobserved = false
+    parentUpdateId = nil
+    updateId = ""
     lock.unlock()
   }
 }

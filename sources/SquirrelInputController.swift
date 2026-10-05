@@ -240,7 +240,11 @@ final class SquirrelInputController: IMKInputController {
     case .leaveUnchanged:
       break
     case .commitOnce(let text):
-      commit(string: text)
+      commitRawFinalization(text, schema: currentOperationSchema())
+    case .unavailableClient:
+      InputArchiveEngine.shared.recordUnavailable(schema: currentOperationSchema())
+      preedit = ""
+      hidePalettes()
     case .clearLocalState:
       preedit = ""
       hidePalettes()
@@ -272,20 +276,13 @@ final class SquirrelInputController: IMKInputController {
     guard session != 0 else { return }
     let operationSchema = currentOperationSchema()
     let input = rimeAPI.get_input(session).map { String(cString: $0) }
-    let hadClient = client != nil
     if let owned = input, !owned.isEmpty {
-      commit(string: owned)
-      if hadClient {
-        InputArchiveEngine.shared.recordRaw(owned, schema: operationSchema)
-      } else {
-        InputArchiveEngine.shared.recordUnavailable(schema: operationSchema)
-      }
+      commitRawFinalization(owned, schema: operationSchema)
     } else {
       // Global finalization precedes session invalidation: an observed terminal
       // outcome is recorded even when librime reports no readable composition.
       InputArchiveEngine.shared.recordUnavailable(schema: operationSchema)
     }
-    rimeAPI.clear_composition(session)
     rimeAPI.clear_composition(session)
   }
 
@@ -371,6 +368,11 @@ final class SquirrelInputController: IMKInputController {
     return String(cString: buffer)
   }
 
+  // periphery:ignore
+  func archiveSetClientForFixture(_ client: IMKTextInput?) {
+    self.client = client
+  }
+
   func currentOperationSchema() -> String {
     guard session != 0 else { return "" }
     var status = RimeStatus_stdbool.rimeStructInit()
@@ -414,6 +416,20 @@ final class SquirrelInputController: IMKInputController {
 }
 
 private extension SquirrelInputController {
+
+  func commitRawFinalization(_ text: String, schema: String) {
+    guard let client else {
+      InputArchiveEngine.shared.recordUnavailable(schema: schema)
+      preedit = ""
+      hidePalettes()
+      return
+    }
+    client.insertText(text, replacementRange: .empty)
+    InputArchiveEngine.shared.recordRaw(text, schema: schema)
+    InputArchiveEngine.shared.markEndpoint("insert_text")
+    preedit = ""
+    hidePalettes()
+  }
 
   func onChordTimer(_: Timer) {
     var processedKeys = false

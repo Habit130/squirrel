@@ -14,8 +14,9 @@ Both of these are required before any input text is admitted:
 1. `input_archive/socket` in the Squirrel config, an absolute non-aliased local
    socket path that is not a known synchronized destination and that fits
    macOS `sun_path` (103 bytes). Absence, empty, symlink, alias, cloud path,
-   or overlong path stays off. Overlong paths are refused; the frontend does
-   not `chdir`.
+   or overlong path stays off. Every existing path component is checked, so a
+   symlink or Finder alias in an ancestor is refused as well as one at the
+   socket itself. Overlong paths are refused; the frontend does not `chdir`.
 2. A locally fresh observation that the collector's desired policy is
    `enabled`. Initial, unknown, stale, `off`, and `paused` observations do not
    admit text and are not a global-effectiveness acknowledgement.
@@ -39,24 +40,26 @@ they stay an uncertainty, not a host-document interruption.
 
 An Input Process is one observed composition. An Observed Continuity Segment
 is cut on retarget, deactivation, schema/source change, pause/resume, known
-loss, and session recreation. A completed process is not itself a
-host-document claim.
+loss, session recreation, and socket rebinding. A composition crossing a
+socket rebind is excluded until its empty or terminal boundary; observations
+admitted before the rebind are never redirected to the new collector. A
+completed process is not itself a host-document claim.
 
 A composition whose prefix was never observed is never admitted later. When an
 observation with content is refused (capture not locally effective, unknown or
 unsupported schema, secure input), the composition stays excluded. It becomes
-eligible again only when an eligible observation continues the last recorded
-preedit exactly, which proves that nothing was hidden; a divergence keeps the
-composition excluded and emits a content-free exclusion notice instead. An
-empty observation is the composition boundary and ends the exclusion. So
-enabling, resuming, or recovering from a sensitive state mid-composition does
-not backfill unobserved keys, while a composition that was always observed is
-unaffected.
+eligible again only after the empty or terminal boundary closes it. Continuing
+with the same preedit is not proof that nothing was hidden while capture was
+paused or the input was sensitive. So enabling, resuming, or recovering
+mid-composition does not backfill unobserved keys; the next composition starts
+a new process, while a composition that was always observed is unaffected.
 
 Global finalization is observed before the session is invalidated. The raw
 terminal is recorded from the process and segment of the composition it closes,
-and the continuity cut for deactivation is applied after that observation. An
-`insertText` return proves only that call, not host persistence.
+and the continuity cut for deactivation is applied after that observation. If
+pending text exists but the client is unavailable, a content-free unavailable
+terminal is recorded; no text is inserted. An `insertText` return proves only
+that call, not host persistence.
 
 Normal engine commit, raw finalization, unavailable client, and unknown
 outcome are distinct. Candidate texts are copied in the order librime already
@@ -103,7 +106,12 @@ The frontend does not invent dropped counts it cannot prove.
 Background transport speaks `admit_batch` and `policy_observe` on the accepted
 Interface: 4-byte big-endian length plus UTF-8 JSON. Connect uses the absolute
 socket path and does not change the process working directory. A failed send
-retries the same capture identity.
+retries the same capture identity at most three times for retryable failures.
+Every queued item is bound to the socket and binding generation active at
+admission. Rebinding clears work that is still queued and invalidates an
+in-flight policy reply from the old binding; an already-started send remains
+confined to its original endpoint and is never replayed at the new endpoint.
+Malformed or mismatched replies are not treated as successful acknowledgements.
 
 ## Timing
 
@@ -122,7 +130,10 @@ live input source. Besides the contract and schema-gate scenarios it drives
 `transition-edge` (a composition that becomes eligible part way through),
 `terminal-provenance` (raw finalization through deactivation), `fault-burst`
 (a held or absent collector), and `concurrent-status` (bounded management
-queries during composition). The contract suite asserts on the persisted
+queries during composition). `binding-controls` holds a policy reply across a
+rebind and holds a real queued item immediately before drain, then checks both
+collectors through their public query interfaces with positive and negative
+identity controls. The contract suite asserts on the persisted
 public query result, not only on observation kinds: a raw terminal that closes
 an observed composition must carry that composition's `process_id` and
 `continuity_segment_id`, and no stored payload may contain text composed while
@@ -152,6 +163,16 @@ a Pass, a noise waiver, or a relaxed threshold. The frozen target is unchanged:
 per-stratum paired p95 <= 1 ms and p99 <= 3 ms including the whole
 handler/action return, with the predeclared strata, warm-up, sample, and block
 rules.
+
+Attempt 4 repairs the binding, terminal, and ancestor-path regressions with
+controlled producer-path gates and persisted public-query destination checks.
+No attempt-4 timing sample is certified unless the naturally observed secure
+input state is off and habit confirms the allocated quiet window. A missing
+quiet window remains an environment blocker; it does not change the frozen
+measurement procedure or target. Attempt 4 preflight found no confirmed quiet
+window, started zero samples, and did not observe Secure Input state. The timing
+driver returned `environment_blocker`; no timing result or certification
+manifest was produced.
 
 Attempt 2 overwrote two files under the original `.local/ac189-timing` root
 while a fresh root was allocated for that attempt. Those original identities
