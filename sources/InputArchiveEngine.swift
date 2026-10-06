@@ -195,7 +195,7 @@ final class InputArchiveEngine {
       return
     }
     if !processOpen && hasContent {
-      openProcess()
+      openProcess(schema: owned.schemaId)
     }
     let kind = classify(
       operation: operation,
@@ -295,7 +295,7 @@ final class InputArchiveEngine {
     return schema != InputArchive.supportedSchema || InputArchiveSignals.secureEventInputEnabled()
   }
 
-  private func openProcess() {
+  private func openProcess(schema: String) {
     lock.lock()
     processOpen = true
     processId = InputArchiveTokens.fresh("proc")
@@ -305,7 +305,7 @@ final class InputArchiveEngine {
     let process = processId
     let segment = segmentId
     lock.unlock()
-    var fields = baseFields(kind: "start", outcome: "input_change", process: process, segment: segment)
+    var fields = baseFields(kind: "start", outcome: "input_change", process: process, segment: segment, schema: schema)
     fields["payload"] = ["stage": "frontend_process_start", "host_persistence": "unknown"]
     _ = admit(fields)
   }
@@ -321,7 +321,7 @@ final class InputArchiveEngine {
     associationValid = true
     lastRecordedPreedit = page.preedit
     lock.unlock()
-    var fields = baseFields(kind: kind, outcome: outcome, process: process, segment: segment)
+    var fields = baseFields(kind: kind, outcome: outcome, process: process, segment: segment, schema: page.schemaId)
     fields["update_id"] = update
     if let parent {
       fields["parent_update_id"] = parent
@@ -347,11 +347,11 @@ final class InputArchiveEngine {
     return result
   }
 
-  func baseFields(kind: String, outcome: String, process: String, segment: String) -> [String: Any] {
+  func baseFields(kind: String, outcome: String, process: String, segment: String, schema: String) -> [String: Any] {
     [
       "envelope_version": InputArchive.envelopeVersion,
       "content_version": InputArchive.contentVersion,
-      "schema_id": InputArchive.supportedSchema,
+      "schema_id": schema,
       "source_instance_id": producer.sourceId,
       "source_local_sequence": nextSequence(),
       "observation_kind": kind,

@@ -58,8 +58,15 @@ Global finalization is observed before the session is invalidated. The raw
 terminal is recorded from the process and segment of the composition it closes,
 and the continuity cut for deactivation is applied after that observation. If
 pending text exists but the client is unavailable, a content-free unavailable
-terminal is recorded; no text is inserted. An `insertText` return proves only
-that call, not host persistence.
+terminal is recorded; no text is inserted. Empty pending input is not that
+case: idle deactivation does not open a process and does not persist
+`unavailable_client`. An unavailable terminal uses the same capture, secure,
+and schema gates as other terminals. A non-Luna or unknown schema is a
+content-free exclusion with schema `unknown`, never a Luna label. Commit text
+is recorded only after `insertText` returns. If that call does not happen, the
+archive records a content-free unavailable terminal when the gates pass, and
+does not claim an insertion or write the host. An `insertText` return proves
+only that call, not host persistence.
 
 Normal engine commit, raw finalization, unavailable client, and unknown
 outcome are distinct. Candidate texts are copied in the order librime already
@@ -123,21 +130,29 @@ update-call completions, not pixels, host persistence, or ranking benefit.
 `NSEvent.timestamp` is not treated as `mach_absolute_time`; event-queue wait
 stays `unknown` unless a compatible timestamp exists.
 
-The isolated check is `scripts/check-input-archive-frontend.py`. It compiles
-the production controller, panel, and librime paths with an invented
-`luna_pinyin` fixture. It is not a pure planner and it does not install a
+The isolated check is `scripts/check-input-archive-frontend.py`. It exports a
+fresh checkout of the committed head, compiles that seam against the staged
+librime library and the accepted read-only backend, and does not install a
 live input source. Besides the contract and schema-gate scenarios it drives
 `transition-edge` (a composition that becomes eligible part way through),
-`terminal-provenance` (raw finalization through deactivation), `fault-burst`
-(a held or absent collector), and `concurrent-status` (bounded management
-queries during composition). `binding-controls` holds a policy reply across a
-rebind and holds a real queued item immediately before drain, then checks both
-collectors through their public query interfaces with positive and negative
-identity controls. The contract suite asserts on the persisted
-public query result, not only on observation kinds: a raw terminal that closes
-an observed composition must carry that composition's `process_id` and
-`continuity_segment_id`, and no stored payload may contain text composed while
-ineligible. Stop only the collector that check started:
+`terminal-gates` (idle, unavailable, uninserted commit, and equal-text
+controls), `terminal-provenance` (raw finalization through deactivation),
+`fault-burst` (a held or absent collector), and `concurrent-status` (bounded
+management queries during composition). `binding-controls` holds a policy reply
+across a rebind and holds a real queued item immediately before drain, then
+checks both collectors through their public query interfaces with positive and
+negative identity controls. The contract suite asserts persisted public-query
+relations: process, segment, update, and sequence identity, with positive and
+negative controls. Kind presence, text joins, canary absence, and a nonnegative
+counter are not those relations. A raw terminal that closes an observed
+composition must carry that composition's `process_id` and
+`continuity_segment_id`. A mid-composition eligibility change must show the
+unobserved process was not continued and the next process is distinct. Held
+storage, failing storage, capacity stop, and queue saturation must be visible
+as the injected fault, not as a count that is merely nonnegative. Pause and
+resume are locally observed, and a collector restart while paused must not
+backfill. The same run writes a Timeline and private-detail walkthrough of the
+commands it actually issued. Stop only the collector that check started:
 
 ```sh
 /usr/bin/python3 -m archive.cli --root "$ROOT" --socket "$SOCKET" collector stop
@@ -173,6 +188,12 @@ measurement procedure or target. Attempt 4 preflight found no confirmed quiet
 window, started zero samples, and did not observe Secure Input state. The timing
 driver returned `environment_blocker`; no timing result or certification
 manifest was produced.
+
+Attempt 5 does not change MEAS-189-v1. No certification sample starts unless a
+new immutable exact-artifact manifest is published on #189 and a naturally
+Secure-Input-off, confirmed quiet window is available. An environment pause is
+not a Pass and does not authorize another attempt. The historical preservation
+Fail remains. This attempt does not claim overall acceptance or a merge.
 
 Attempt 2 overwrote two files under the original `.local/ac189-timing` root
 while a fresh root was allocated for that attempt. Those original identities

@@ -16,7 +16,12 @@ final class SquirrelInputController: IMKInputController {
   private var preedit: String = ""
   private var selRange: NSRange = .empty
   private var caretPos: Int = 0
-  private var pendingArchiveCommit: String?
+  private enum PendingArchiveCommit {
+    case inserted(String)
+    case unavailable
+  }
+
+  private var pendingArchiveCommit: PendingArchiveCommit?
   private var lastModifiers: NSEvent.ModifierFlags = .init()
   private var session: RimeSessionId = 0
   private var schemaId: String = ""
@@ -278,11 +283,10 @@ final class SquirrelInputController: IMKInputController {
     let input = rimeAPI.get_input(session).map { String(cString: $0) }
     if let owned = input, !owned.isEmpty {
       commitRawFinalization(owned, schema: operationSchema)
-    } else {
-      // Global finalization precedes session invalidation: an observed terminal
-      // outcome is recorded even when librime reports no readable composition.
-      InputArchiveEngine.shared.recordUnavailable(schema: operationSchema)
     }
+    // Empty pending input is not an unavailable client. Idle deactivation must
+    // not open a process or persist a terminal. A known pending composition
+    // whose client is unavailable is recorded inside commitRawFinalization.
     rimeAPI.clear_composition(session)
   }
 
@@ -611,8 +615,14 @@ private extension SquirrelInputController {
     if rimeAPI.get_commit(session, &commitText) {
       if let text = commitText.text {
         let owned = String(cString: text)
-        commit(string: owned)
-        pendingArchiveCommit = owned
+        if commit(string: owned) {
+          pendingArchiveCommit = .inserted(owned)
+        } else {
+          // commit(_:) returned before insertText. Do not retain the text or
+          // claim that insertion happened. The chord timer reaches this same
+          // consume path with no client check.
+          pendingArchiveCommit = .unavailable
+        }
       }
       _ = rimeAPI.free_commit(&commitText)
     }
@@ -642,10 +652,15 @@ private extension SquirrelInputController {
       }
       _ = rimeAPI.free_status(&status)
     }
-    if let pendingCommit = pendingArchiveCommit {
-      InputArchiveEngine.shared.recordCommit(pendingCommit, schema: operationSchema)
-      pendingArchiveCommit = nil
+    switch pendingArchiveCommit {
+    case .inserted(let text):
+      InputArchiveEngine.shared.recordCommit(text, schema: operationSchema)
+    case .unavailable:
+      InputArchiveEngine.shared.recordUnavailable(schema: operationSchema)
+    case nil:
+      break
     }
+    pendingArchiveCommit = nil
 
     var ctx = RimeContext_stdbool.rimeStructInit()
     if rimeAPI.get_context(session, &ctx) {
@@ -773,12 +788,14 @@ private extension SquirrelInputController {
     }
   }
 
-  func commit(string: String) {
-    guard let client = client else { return }
+  @discardableResult
+  func commit(string: String) -> Bool {
+    guard let client = client else { return false }
     client.insertText(string, replacementRange: .empty)
     InputArchiveEngine.shared.markEndpoint("insert_text")
     preedit = ""
     hidePalettes()
+    return true
   }
 
   func show(preedit: String, selRange: NSRange, caretPos: Int) {

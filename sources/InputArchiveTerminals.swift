@@ -52,23 +52,25 @@ extension InputArchiveEngine {
       closeExcludedComposition()
       return
     }
-    if !producer.captureEnabled() && kind != "unavailable_client" {
+    // Unavailable uses the same capture, secure, and schema gates. It must not
+    // open a process or persist a Luna label for a non-Luna or unknown schema.
+    if !producer.captureEnabled() {
       closeExcludedComposition()
       return
     }
-    if kind != "unavailable_client" && InputArchiveSignals.secureEventInputEnabled() {
+    if InputArchiveSignals.secureEventInputEnabled() {
       closeExcludedComposition()
       admitExclusion()
       return
     }
     // Cached or hard-coded Luna identity is not proof. Unknown and other schemas exclude without text.
-    if kind != "unavailable_client" && schema != InputArchive.supportedSchema {
+    if schema != InputArchive.supportedSchema {
       closeExcludedComposition()
       admitExclusion()
       return
     }
     lock.lock()
-    if kind != "unavailable_client" && compositionUnobserved {
+    if compositionUnobserved {
       // The composition that this terminal closes was never observed from its
       // start, so its text is not eligible. The observed terminal outcome is
       // still reported as a content-free exclusion notice.
@@ -94,7 +96,7 @@ extension InputArchiveEngine {
     parentUpdateId = nil
     updateId = ""
     lock.unlock()
-    var fields = baseFields(kind: kind, outcome: outcome, process: process, segment: segment)
+    var fields = baseFields(kind: kind, outcome: outcome, process: process, segment: segment, schema: schema)
     fields["update_id"] = update
     fields["commit_id"] = commitId
     if let parent {
@@ -124,7 +126,7 @@ extension InputArchiveEngine {
     let process = processId
     let segment = segmentId
     lock.unlock()
-    var fields = baseFields(kind: "exclusion_notice", outcome: "unknown", process: process, segment: segment)
+    var fields = baseFields(kind: "exclusion_notice", outcome: "unknown", process: process, segment: segment, schema: "unknown")
     fields["eligibility"] = "excluded"
     fields["reason"] = "deliberate_exclusion"
     fields["schema_id"] = "unknown"

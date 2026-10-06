@@ -152,6 +152,43 @@ def self_test():
     }]
     if excluded_terminal_relation(reused, excluded_identity).get("passed"):
         failures.append("excluded_terminal_public_query_negative")
+    if idle_terminal_relation([], {"source_instance_id": "s", "idle_process_id": "p"}).get("passed") is not True:
+        failures.append("idle_terminal_negative")
+    if idle_terminal_relation(
+        [{"source_instance_id": "s", "process_id": "p", "observation_kind": "unavailable_client"}],
+        {"source_instance_id": "s", "idle_process_id": "p"},
+    ).get("passed") is True:
+        failures.append("idle_terminal_positive_must_fail")
+    if not confirmed_unavailable_relation(
+        [{
+            "source_instance_id": "s", "process_id": "p", "continuity_segment_id": "g",
+            "observation_kind": "unavailable_client", "schema_id": "luna_pinyin",
+            "payload": {"operation": "unavailable_client"},
+        }],
+        {
+            "source_instance_id": "s", "unavailable_process_id": "p",
+            "unavailable_segment_id": "g", "unavailable_schema": "luna_pinyin",
+        },
+    ).get("passed"):
+        failures.append("confirmed_unavailable_relation")
+    if confirmed_unavailable_relation(
+        [{
+            "source_instance_id": "s", "process_id": "p", "continuity_segment_id": "g",
+            "observation_kind": "unavailable_client", "schema_id": "luna_pinyin",
+            "payload": {"text": "secret"},
+        }],
+        {
+            "source_instance_id": "s", "unavailable_process_id": "p",
+            "unavailable_segment_id": "g", "unavailable_schema": "luna_pinyin",
+        },
+    ).get("passed"):
+        failures.append("unavailable_text_must_fail")
+    if fault_requires_condition({"admission_refused_units": 0}, "capacity_stop", lambda value: value is True):
+        failures.append("missing_fault_key_must_fail")
+    if fault_requires_condition({"capacity_stop": False}, "capacity_stop", lambda value: value is True):
+        failures.append("false_fault_must_fail")
+    if not fault_requires_condition({"capacity_stop": True}, "capacity_stop", lambda value: value is True):
+        failures.append("fault_predicate_requires_the_condition")
     if "five_probes" not in REQUIRED:
         failures.append("scenario_inventory")
     skipped = {"five_probes": "skipped"}
@@ -433,8 +470,10 @@ translator:
     )
 
 
-def compile_harness(root, probes):
+def compile_harness(root, probes, source_root=None, library_dir=None):
     private_dir(probes)
+    source_root = os.path.abspath(source_root or os.getcwd())
+    library_dir = os.path.abspath(library_dir or os.path.join(os.getcwd(), "lib"))
     app = os.path.join(probes, "Harness.app", "Contents", "MacOS")
     private_dir(app)
     plist = os.path.join(probes, "Harness.app", "Contents", "Info.plist")
@@ -450,7 +489,7 @@ def compile_harness(root, probes):
 """)
     sources = sorted(
         os.path.join("sources", name)
-        for name in os.listdir("sources")
+        for name in os.listdir(os.path.join(source_root, "sources"))
         if name.endswith(".swift") and name != "Main.swift"
     )
     binary = os.path.join(app, "harness")
@@ -460,15 +499,15 @@ def compile_harness(root, probes):
         "xcrun", "swiftc", "-parse-as-library", "-swift-version", "5",
         "-enable-bare-slash-regex", "-O",
         "-import-objc-header", "sources/Squirrel-Bridging-Header.h",
-        "-I", include, "-L", "lib", "-lrime.1",
-        "-Xlinker", "-rpath", "-Xlinker", os.path.abspath("lib"),
+        "-I", include, "-L", library_dir, "-lrime.1",
+        "-Xlinker", "-rpath", "-Xlinker", library_dir,
         "-framework", "AppKit", "-framework", "InputMethodKit",
         "-framework", "Carbon", "-framework", "UserNotifications",
         "-framework", "CoreGraphics",
     ] + sources + ["probes/input_archive_frontend_harness.swift", "-o", binary]
     if os.path.lexists(binary):
         raise RuntimeError("harness output already exists: %s" % binary)
-    code, out, err = run(command, timeout=180)
+    code, out, err = run(command, cwd=source_root, timeout=180)
     if code != 0:
         sys.stderr.write(err)
         raise SystemExit(code)
@@ -995,6 +1034,761 @@ def sigpipe_controls(binary, scratch):
     return results
 
 
+def source_rows(rows, source):
+    return [row for row in rows if row.get("source_instance_id") == source]
+
+
+def payload_has_text(row):
+    payload = row.get("payload")
+    return isinstance(payload, dict) and "text" in payload
+
+
+def idle_terminal_relation(rows, identity):
+    """Idle deactivation must not open a process or persist unavailable_client."""
+    source = identity.get("source_instance_id")
+    process = identity.get("idle_process_id")
+    if not source or not process:
+        return {"passed": False, "reason": "missing idle identity"}
+    phantom = [
+        row for row in source_rows(rows, source)
+        if row.get("process_id") == process
+    ]
+    return {
+        "passed": not phantom,
+        "idle_process_row_count": len(phantom),
+        "opened_process": bool(phantom),
+        "unavailable_row_count": sum(row.get("observation_kind") == "unavailable_client" for row in phantom),
+    }
+
+
+def confirmed_unavailable_relation(rows, identity):
+    """A known pending Luna composition with an unavailable client persists one content-free terminal."""
+    source = identity.get("source_instance_id")
+    process = identity.get("unavailable_process_id")
+    segment = identity.get("unavailable_segment_id")
+    schema = identity.get("unavailable_schema")
+    if not all((source, process, segment, schema)):
+        return {"passed": False, "reason": "missing unavailable identity"}
+    matches = [
+        row for row in source_rows(rows, source)
+        if row.get("process_id") == process
+        and row.get("continuity_segment_id") == segment
+        and row.get("observation_kind") == "unavailable_client"
+    ]
+    if len(matches) != 1:
+        return {"passed": False, "terminal_count": len(matches), "schema_id": None, "content_free": False}
+    row = matches[0]
+    content_free = not payload_has_text(row)
+    schema_ok = row.get("schema_id") == schema == "luna_pinyin"
+    return {
+        "passed": content_free and schema_ok,
+        "terminal_count": 1,
+        "schema_id": row.get("schema_id"),
+        "content_free": content_free,
+        "same_process": True,
+        "same_segment": True,
+        "durable_seq": row.get("durable_seq"),
+    }
+
+
+def schema_excluded_unavailable_relation(rows, identity):
+    """Non-Luna and unknown unavailable terminals are content-free exclusions, not Luna labels."""
+    source = identity.get("source_instance_id")
+    other = identity.get("other_process_id")
+    unknown = identity.get("unknown_process_id")
+    if not all((source, other, unknown)) or other == unknown:
+        return {"passed": False, "reason": "missing schema-exclusion identity"}
+    labeled = [
+        row for row in source_rows(rows, source)
+        if row.get("process_id") in (other, unknown)
+        and row.get("schema_id") == "luna_pinyin"
+        and row.get("observation_kind") == "unavailable_client"
+    ]
+    stored_text = [
+        row for row in source_rows(rows, source)
+        if row.get("process_id") in (other, unknown) and payload_has_text(row)
+    ]
+    notices = [
+        row for row in source_rows(rows, source)
+        if row.get("process_id") in (other, unknown)
+        and row.get("observation_kind") == "exclusion_notice"
+    ]
+    notices_ok = bool(notices) and all(
+        row.get("schema_id") == "unknown" and not payload_has_text(row)
+        for row in notices
+    )
+    both_processes = {row.get("process_id") for row in notices} >= {other, unknown}
+    return {
+        "passed": not labeled and not stored_text and notices_ok and both_processes,
+        "luna_unavailable_count": len(labeled),
+        "excluded_text_count": len(stored_text),
+        "exclusion_notice_count": len(notices),
+        "exclusion_schema_unknown": notices_ok,
+        "both_processes_excluded": both_processes,
+    }
+
+
+def uninserted_commit_relation(rows, identity):
+    """Commit text is stored only after insertText. A commit that did not insert is content-free."""
+    source = identity.get("source_instance_id")
+    inserted = identity.get("inserted_process_id")
+    uninserted = identity.get("uninserted_process_id")
+    segment = identity.get("uninserted_segment_id")
+    if not all((source, inserted, uninserted, segment)) or inserted == uninserted:
+        return {"passed": False, "reason": "missing uninserted identity"}
+    positive = [
+        row for row in source_rows(rows, source)
+        if row.get("process_id") == inserted
+        and row.get("observation_kind") == "commit_attempt"
+        and payload_has_text(row)
+    ]
+    false_insert = [
+        row for row in source_rows(rows, source)
+        if row.get("process_id") == uninserted
+        and (
+            row.get("observation_kind") == "commit_attempt"
+            or payload_has_text(row)
+        )
+    ]
+    unavailable = [
+        row for row in source_rows(rows, source)
+        if row.get("process_id") == uninserted
+        and row.get("continuity_segment_id") == segment
+        and row.get("observation_kind") == "unavailable_client"
+        and not payload_has_text(row)
+        and row.get("schema_id") == "luna_pinyin"
+    ]
+    return {
+        "passed": len(positive) == 1 and not false_insert and len(unavailable) == 1,
+        "inserted_commit_count": len(positive),
+        "false_insert_count": len(false_insert),
+        "content_free_unavailable_count": len(unavailable),
+        "same_uninserted_process": True,
+        "same_uninserted_segment": len(unavailable) == 1,
+    }
+
+
+def equal_text_relation(rows, identity):
+    """Two production compositions of equal text keep distinct capture identities."""
+    source = identity.get("source_instance_id")
+    first = identity.get("equal_first_process_id")
+    second = identity.get("equal_second_process_id")
+    if not all((source, first, second)) or first == second:
+        return {"passed": False, "reason": "missing equal-text identity"}
+    def commits(process):
+        return [
+            row for row in source_rows(rows, source)
+            if row.get("process_id") == process and row.get("observation_kind") == "commit_attempt"
+        ]
+    left = commits(first)
+    right = commits(second)
+    if len(left) != 1 or len(right) != 1:
+        return {"passed": False, "left_count": len(left), "right_count": len(right)}
+    left_text = payload_text(left[0])
+    right_text = payload_text(right[0])
+    distinct_sequence = left[0].get("source_local_sequence") != right[0].get("source_local_sequence")
+    return {
+        "passed": bool(left_text) and left_text == right_text and distinct_sequence,
+        "distinct_process": True,
+        "distinct_sequence": distinct_sequence,
+        "equal_payload": left_text == right_text,
+        "left_sequence": left[0].get("source_local_sequence"),
+        "right_sequence": right[0].get("source_local_sequence"),
+        "content_included": False,
+    }
+
+
+def association_relation(rows, status_body, identity):
+    """Stored retry, missing, out-of-order, and conflicting observations. Not a text join."""
+    source = identity.get("source_instance_id")
+    if not source:
+        return {"passed": False, "reason": "missing association identity"}
+    owned = source_rows(rows, source)
+    retry_rows = [
+        row for row in owned
+        if row.get("process_id") == identity.get("retry_process_id")
+        and row.get("source_local_sequence") == int(identity.get("retry_sequence", "0"))
+        and row.get("observation_kind") == "commit_attempt"
+    ]
+    missing_rows = [
+        row for row in owned
+        if row.get("process_id") == identity.get("missing_process_id")
+        and row.get("update_id") == identity.get("missing_update_id")
+        and row.get("parent_update_id") == identity.get("missing_parent_update_id")
+    ]
+    missing_parent_present = any(
+        row.get("update_id") == identity.get("missing_parent_update_id") for row in owned
+    )
+    child = [
+        row for row in owned
+        if row.get("update_id") == identity.get("order_child_update_id")
+        and row.get("process_id") == identity.get("order_process_id")
+    ]
+    parent = [
+        row for row in owned
+        if row.get("update_id") == identity.get("order_parent_update_id")
+        and row.get("process_id") == identity.get("order_process_id")
+    ]
+    order_ok = (
+        len(child) == 1 and len(parent) == 1
+        and child[0].get("parent_update_id") == identity.get("order_parent_update_id")
+        and (child[0].get("durable_seq") or 0) < (parent[0].get("durable_seq") or 0)
+    )
+    conflict_rows = [
+        row for row in owned
+        if row.get("source_local_sequence") == int(identity.get("conflict_sequence", "0"))
+        and payload_text(row) == "INV-CONFLICT"
+    ]
+    conflicts = status_body.get("identity_conflicts")
+    retry_ok = len(retry_rows) == 1
+    missing_ok = (
+        len(missing_rows) == 1
+        and not missing_parent_present
+        and missing_rows[0].get("parent_status") == "missing"
+        and "missing_parent_update" in (missing_rows[0].get("incompleteness") or [])
+    )
+    conflict_ok = conflicts == 1 and not conflict_rows
+    return {
+        "passed": retry_ok and missing_ok and order_ok and conflict_ok,
+        "retry_stored_once": retry_ok,
+        "retry_row_count": len(retry_rows),
+        "missing_parent_status": missing_rows[0].get("parent_status") if missing_rows else None,
+        "missing_parent_absent": missing_ok,
+        "out_of_order_parent_after_child": order_ok,
+        "child_seq": child[0].get("durable_seq") if child else None,
+        "parent_seq": parent[0].get("durable_seq") if parent else None,
+        "identity_conflicts": conflicts,
+        "conflicting_payload_not_semantic": not conflict_rows,
+    }
+
+
+def mid_composition_relation(rows, identity):
+    """Stored no-backfill relation for the mid-composition eligibility transition."""
+    source = identity.get("source_instance_id")
+    excluded = identity.get("excluded_process_id")
+    segment = identity.get("excluded_segment_id")
+    excluded_update = identity.get("excluded_update_id")
+    next_process = identity.get("next_process_id")
+    next_segment = identity.get("next_segment_id")
+    next_update = identity.get("next_update_id")
+    try:
+        cut = int(identity.get("cut_sequence", ""))
+        after = int(identity.get("sequence_after", ""))
+    except (TypeError, ValueError):
+        return {"passed": False, "reason": "invalid transition sequence"}
+    if not all((source, excluded, segment, next_process, next_update)) or excluded == next_process:
+        return {"passed": False, "reason": "missing transition identity"}
+    owned = source_rows(rows, source)
+    notices = [
+        row for row in owned
+        if row.get("process_id") == excluded
+        and row.get("observation_kind") == "exclusion_notice"
+        and (row.get("source_local_sequence") or 0) <= cut
+    ]
+    included_after = [
+        row for row in owned
+        if row.get("process_id") == excluded
+        and (row.get("source_local_sequence") or 0) > cut
+        and row.get("observation_kind") != "exclusion_notice"
+    ]
+    next_included = [
+        row for row in owned
+        if row.get("process_id") == next_process
+        and row.get("continuity_segment_id") == next_segment
+        and row.get("observation_kind") in PAGE_KINDS + ("commit_attempt",)
+        and cut < (row.get("source_local_sequence") or 0) <= after
+    ]
+    notice_free = bool(notices) and all(not payload_has_text(row) for row in notices)
+    passed = (
+        notice_free
+        and not included_after
+        and bool(next_included)
+        and excluded_update != next_update
+    )
+    return {
+        "passed": passed,
+        "excluded_notice_count": len(notices),
+        "excluded_notice_content_free": notice_free,
+        "included_after_cut": len(included_after),
+        "next_included_count": len(next_included),
+        "different_process": excluded != next_process,
+        "different_update": excluded_update != next_update,
+        "old_process_continued": bool(included_after),
+        "next_segment_id": next_segment,
+        "excluded_segment_id": segment,
+    }
+
+
+def pause_restart_relation(rows, identities):
+    """Locally observed pause, collector restart, and resume do not backfill."""
+    baseline = identities.get("baseline") or {}
+    paused = identities.get("paused") or {}
+    restarted = identities.get("restarted") or {}
+    resumed = identities.get("resumed") or {}
+    required = (baseline, paused, restarted, resumed)
+    if any(item.get("source_instance_id") in (None, "") for item in required):
+        return {"passed": False, "reason": "missing pause identity"}
+    if len({item["source_instance_id"] for item in required}) != 4:
+        return {"passed": False, "reason": "pause controls did not use distinct frontend instances"}
+    baseline_rows = source_rows(rows, baseline["source_instance_id"])
+    baseline_hit = [
+        row for row in baseline_rows
+        if row.get("process_id") == baseline.get("process_id")
+        and row.get("continuity_segment_id") == baseline.get("segment_id")
+        and row.get("observation_kind") == "commit_attempt"
+    ]
+    paused_rows = source_rows(rows, paused["source_instance_id"])
+    restarted_rows = source_rows(rows, restarted["source_instance_id"])
+    resumed_rows = [
+        row for row in source_rows(rows, resumed["source_instance_id"])
+        if row.get("process_id") == resumed.get("process_id")
+        and row.get("continuity_segment_id") == resumed.get("segment_id")
+        and row.get("observation_kind") in PAGE_KINDS + ("commit_attempt",)
+    ]
+    local_pause = (
+        paused.get("observed_desired") == "paused" and paused.get("fresh") == "true"
+        and restarted.get("observed_desired") == "paused" and restarted.get("fresh") == "true"
+    )
+    local_resume = resumed.get("observed_desired") == "enabled" and resumed.get("fresh") == "true"
+    passed = (
+        len(baseline_hit) == 1
+        and not paused_rows
+        and not restarted_rows
+        and bool(resumed_rows)
+        and resumed.get("segment_id") != baseline.get("segment_id")
+        and resumed.get("process_id") != baseline.get("process_id")
+        and local_pause
+        and local_resume
+    )
+    return {
+        "passed": passed,
+        "baseline_commit_count": len(baseline_hit),
+        "paused_stored_count": len(paused_rows),
+        "restarted_stored_count": len(restarted_rows),
+        "resumed_included_count": len(resumed_rows),
+        "locally_observed_pause": local_pause,
+        "locally_observed_resume": local_resume,
+        "different_process_after_resume": resumed.get("process_id") != baseline.get("process_id"),
+        "different_segment_after_resume": resumed.get("segment_id") != baseline.get("segment_id"),
+    }
+
+
+def fault_requires_condition(status, key, predicate):
+    """A nonnegative counter is not evidence. The predicate must require the fault."""
+    if not isinstance(status, dict) or key not in status:
+        return False
+    return predicate(status.get(key)) is True
+
+
+def status_body(backend, socket):
+    code, body, err = cli(backend, socket, "status")
+    return code, (body.get("body") or {}), err
+
+
+def admit_fixture(backend, socket, observations, source):
+    # The fixture file is private and is not a public report.
+    return observations, source
+
+
+def write_admit_fixture(path, observations):
+    write_private(path, json.dumps({"observations": observations, "content_included": False}) + "\n")
+
+
+def run_admit(backend, socket, fixture_path, source):
+    return run(
+        ["/usr/bin/python3", "-m", "archive.cli", "--socket", socket, "--json",
+         "admit", "--fixture", fixture_path, "--source-instance-id", source],
+        env={"PYTHONPATH": backend},
+        timeout=30,
+    )
+
+
+def observation_fixture(kind, process_id, sequence, **extra):
+    record = {
+        "envelope_version": 1,
+        "content_version": 1,
+        "schema_id": "luna_pinyin",
+        "source_local_sequence": sequence,
+        "observation_kind": kind,
+        "process_id": process_id,
+        "outcome": kind,
+        "host_persistence": "unknown",
+        "payload": {"text": "INV-189-FAULT", "operation": kind},
+    }
+    record.update(extra)
+    return record
+
+
+def export_isolated_checkout(scratch):
+    code, head, err = run(["git", "rev-parse", "HEAD"])
+    if code != 0:
+        raise RuntimeError("cannot identify HEAD: %s" % err)
+    head = head.strip()
+    code, dirty, err = run(["git", "status", "--porcelain", "--untracked-files=no"])
+    if code != 0:
+        raise RuntimeError("cannot read delivery tree status: %s" % err)
+    if dirty.strip():
+        raise RuntimeError("isolated checkout requires a clean delivery tree")
+    destination = os.path.join(scratch, "iso-" + uuid.uuid4().hex[:8])
+    private_dir(destination)
+    archive = subprocess.run(
+        ["git", "archive", "--format=tar", head],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if archive.returncode != 0:
+        raise RuntimeError("git archive failed: %s" % archive.stderr.decode("utf-8", "replace"))
+    extract = subprocess.run(
+        ["tar", "-x", "-C", destination],
+        input=archive.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if extract.returncode != 0:
+        raise RuntimeError("isolated extract failed: %s" % extract.stderr.decode("utf-8", "replace"))
+    if not os.path.isfile(os.path.join(destination, "sources", "SquirrelInputController.swift")):
+        raise RuntimeError("isolated checkout is missing the frontend seam")
+    return destination, head
+
+
+def frontend_fixture_dirs(scratch, label, socket):
+    shared = os.path.join(scratch, label + "-shared")
+    user = os.path.join(scratch, label + "-user")
+    log = os.path.join(scratch, label + "-log")
+    write_schema(shared, user, socket)
+    return shared, user, log
+
+
+def collector_fault_relations(backend, scratch, binary, shared, user, log):
+    """Held storage, failing storage, capacity stop, and queue saturation.
+
+    Each predicate requires the injected fault. A nonnegative counter is not enough.
+    """
+    detail = {}
+    env = {"PYTHONPATH": backend}
+
+    held_root = fresh_collector_root(scratch, "hd")
+    private_dir(held_root)
+    held_socket = os.path.join(held_root, "s")
+    hold_path = os.path.join(held_root, "hold")
+    os.mkfifo(hold_path, 0o600)
+    hold_fd = os.open(hold_path, os.O_RDWR)
+    try:
+        start_collector(backend, held_root, held_socket, publication_hold=hold_path, collector_queue_count=8)
+        run(["/usr/bin/python3", "-m", "archive.cli", "--socket", held_socket, "policy", "enable", "--expect-revision", "0"], env=env)
+        held_ready = False
+        for _ in range(40):
+            code, body, _ = status_body(backend, held_socket)
+            if code == 0 and body.get("publication_hold") is True:
+                held_ready = True
+                break
+            time.sleep(0.05)
+        before_seq = body.get("durable_seq")
+        fixture = os.path.join(held_root, "admit.json")
+        write_admit_fixture(fixture, [observation_fixture("input_change", "proc189held", 1, update_id="upd189held")])
+        admit_code, _, admit_err = run_admit(backend, held_socket, fixture, "src189held")
+        time.sleep(0.3)
+        held_code, held_status, _ = status_body(backend, held_socket)
+        cli(backend, held_socket, "checkpoint")
+        during_code, during_rows, _ = query_payloads(backend, held_socket)
+        during_hit = any(row.get("process_id") == "proc189held" for row in during_rows)
+        burst_report = os.path.join(held_root, "burst.json")
+        held_shared, held_user, held_log = frontend_fixture_dirs(scratch, "hd-rime", held_socket)
+        burst_code, _, _, _ = harness(binary, held_shared, held_user, held_log, held_socket, "fault-burst", burst_report)
+        burst_body = json.load(open(burst_report)) if os.path.exists(burst_report) else {}
+        os.write(hold_fd, b"x")
+        released = False
+        for _ in range(40):
+            code, released_status, _ = status_body(backend, held_socket)
+            if code == 0 and released_status.get("publication_hold") is False:
+                released = True
+                break
+            time.sleep(0.05)
+        cli(backend, held_socket, "checkpoint")
+        time.sleep(0.4)
+        after_code, after_rows, _ = query_payloads(backend, held_socket)
+        after_hit = any(
+            row.get("source_instance_id") == "src189held" and row.get("process_id") == "proc189held"
+            for row in after_rows
+        )
+        detail["storage_held"] = {
+            "passed": (
+                held_ready and admit_code == 0 and held_code == 0 and during_code == 0 and after_code == 0
+                and fault_requires_condition(held_status, "publication_hold", lambda value: value is True)
+                and (held_status.get("received_unpublished") or 0) > 0
+                and held_status.get("durable_seq") == before_seq
+                and not during_hit
+                and burst_code == 0 and burst_body.get("failure_count", 1) == 0
+                and released and after_hit
+            ),
+            "publication_hold": held_status.get("publication_hold"),
+            "received_unpublished": held_status.get("received_unpublished"),
+            "durable_seq_unchanged": held_status.get("durable_seq") == before_seq,
+            "absent_while_held": not during_hit,
+            "frontend_finished": burst_code == 0 and burst_body.get("failure_count", 1) == 0,
+            "durable_after_release": after_hit,
+            "admit_exit": admit_code,
+        }
+    finally:
+        os.close(hold_fd)
+        stop_collector(backend, held_root, held_socket)
+
+    fail_root = fresh_collector_root(scratch, "sf")
+    private_dir(fail_root)
+    fail_socket = os.path.join(fail_root, "s")
+    try:
+        start_collector(backend, fail_root, fail_socket)
+        run(["/usr/bin/python3", "-m", "archive.cli", "--socket", fail_socket, "policy", "enable", "--expect-revision", "0"], env=env)
+        first = os.path.join(fail_root, "first.json")
+        second = os.path.join(fail_root, "second.json")
+        write_admit_fixture(first, [observation_fixture("input_change", "proc189keep", 1, update_id="upd189keep")])
+        write_admit_fixture(second, [observation_fixture("input_change", "proc189fail", 2, update_id="upd189fail")])
+        run_admit(backend, fail_socket, first, "src189fail")
+        cli(backend, fail_socket, "checkpoint")
+        time.sleep(0.3)
+        before_code, before_status, _ = status_body(backend, fail_socket)
+        observations = os.path.join(fail_root, "observations.jsonl")
+        os.chmod(observations, 0o000)
+        fail_report = os.path.join(fail_root, "input.json")
+        fail_shared, fail_user, fail_log = frontend_fixture_dirs(scratch, "sf-rime", fail_socket)
+        input_code, _, _, _ = harness(binary, fail_shared, fail_user, fail_log, fail_socket, "absent", fail_report)
+        run_admit(backend, fail_socket, second, "src189fail")
+        time.sleep(0.4)
+        failed_code, failed_status, _ = status_body(backend, fail_socket)
+        os.chmod(observations, 0o600)
+        query_code, failed_rows, _ = query_payloads(backend, fail_socket)
+        kept = any(row.get("process_id") == "proc189keep" for row in failed_rows)
+        failed_absent = not any(row.get("process_id") == "proc189fail" for row in failed_rows)
+        detail["storage_failing"] = {
+            "passed": (
+                before_code == 0 and failed_code == 0 and query_code == 0
+                and before_status.get("storage_failure") is False
+                and fault_requires_condition(failed_status, "storage_failure", lambda value: value is True)
+                and (failed_status.get("storage_failed_units") or 0) > 0
+                and failed_status.get("durable_seq") == before_status.get("durable_seq")
+                and kept and failed_absent
+                and input_code == 0
+            ),
+            "storage_failure": failed_status.get("storage_failure"),
+            "storage_failed_units": failed_status.get("storage_failed_units"),
+            "durable_prefix_unchanged": failed_status.get("durable_seq") == before_status.get("durable_seq"),
+            "prior_observation_remains": kept,
+            "failed_observation_absent": failed_absent,
+            "frontend_finished": input_code == 0,
+        }
+    finally:
+        observations = os.path.join(fail_root, "observations.jsonl")
+        if os.path.exists(observations):
+            os.chmod(observations, 0o600)
+        stop_collector(backend, fail_root, fail_socket)
+
+    stop_root = fresh_collector_root(scratch, "cp")
+    private_dir(stop_root)
+    stop_socket = os.path.join(stop_root, "s")
+    healthy_root = fresh_collector_root(scratch, "ch")
+    private_dir(healthy_root)
+    healthy_socket = os.path.join(healthy_root, "s")
+    try:
+        start_collector(backend, stop_root, stop_socket, archive_capacity_bytes=1)
+        start_collector(backend, healthy_root, healthy_socket)
+        run(["/usr/bin/python3", "-m", "archive.cli", "--socket", stop_socket, "policy", "enable", "--expect-revision", "0"], env=env)
+        run(["/usr/bin/python3", "-m", "archive.cli", "--socket", healthy_socket, "policy", "enable", "--expect-revision", "0"], env=env)
+        refused = os.path.join(stop_root, "refused.json")
+        write_admit_fixture(refused, [observation_fixture("commit_attempt", "proc189capacity", 1, update_id="upd189capacity")])
+        run_admit(backend, stop_socket, refused, "src189capacity")
+        run_admit(backend, stop_socket, refused, "src189capacity")
+        cli(backend, stop_socket, "checkpoint")
+        time.sleep(0.3)
+        stop_code, stop_status, _ = status_body(backend, stop_socket)
+        stop_query, stop_rows, _ = query_payloads(backend, stop_socket)
+        healthy_fixture = os.path.join(healthy_root, "kept.json")
+        write_admit_fixture(healthy_fixture, [observation_fixture("commit_attempt", "proc189capacity", 1, update_id="upd189capacity")])
+        run_admit(backend, healthy_socket, healthy_fixture, "src189capacity")
+        cli(backend, healthy_socket, "checkpoint")
+        time.sleep(0.3)
+        healthy_code, healthy_rows, _ = query_payloads(backend, healthy_socket)
+        refused_absent = not any(row.get("process_id") == "proc189capacity" for row in stop_rows)
+        healthy_present = any(row.get("process_id") == "proc189capacity" for row in healthy_rows)
+        detail["capacity_stop"] = {
+            "passed": (
+                stop_code == 0 and stop_query == 0 and healthy_code == 0
+                and fault_requires_condition(stop_status, "capacity_stop", lambda value: value is True)
+                and (stop_status.get("capacity_refused_units") or 0) > 0
+                and refused_absent and healthy_present
+            ),
+            "capacity_stop": stop_status.get("capacity_stop"),
+            "capacity_refused_units": stop_status.get("capacity_refused_units"),
+            "refused_observation_absent": refused_absent,
+            "healthy_control_present": healthy_present,
+        }
+        sat_root = fresh_collector_root(scratch, "qs")
+        private_dir(sat_root)
+        sat_socket = os.path.join(sat_root, "s")
+        sat_hold = os.path.join(sat_root, "hold")
+        os.mkfifo(sat_hold, 0o600)
+        sat_fd = os.open(sat_hold, os.O_RDWR)
+        try:
+            start_collector(
+                backend, sat_root, sat_socket,
+                publication_hold=sat_hold, collector_queue_count=1, collector_queue_bytes=4096,
+            )
+            run(["/usr/bin/python3", "-m", "archive.cli", "--socket", sat_socket, "policy", "enable", "--expect-revision", "0"], env=env)
+            sat_fixture = os.path.join(sat_root, "sat.json")
+            write_admit_fixture(sat_fixture, [
+                observation_fixture("input_change", "proc189sat%d" % index, index, update_id="upd189sat%d" % index)
+                for index in range(1, 5)
+            ])
+            run_admit(backend, sat_socket, sat_fixture, "src189sat")
+            time.sleep(0.3)
+            sat_code, sat_status, _ = status_body(backend, sat_socket)
+            input_report = os.path.join(sat_root, "input.json")
+            sat_shared, sat_user, sat_log = frontend_fixture_dirs(scratch, "qs-rime", sat_socket)
+            input_code, _, _, _ = harness(binary, sat_shared, sat_user, sat_log, sat_socket, "queue-saturate", input_report)
+            input_body = json.load(open(input_report)) if os.path.exists(input_report) else {}
+            detail["queue_saturation"] = {
+                "passed": (
+                    sat_code == 0
+                    and fault_requires_condition(sat_status, "known_dropped_units", lambda value: isinstance(value, int) and value > 0)
+                    and input_code == 0 and input_body.get("failure_count", 1) == 0
+                ),
+                "known_dropped_units": sat_status.get("known_dropped_units"),
+                "frontend_finished": input_code == 0 and input_body.get("failure_count", 1) == 0,
+            }
+        finally:
+            os.close(sat_fd)
+            stop_collector(backend, sat_root, sat_socket)
+    finally:
+        stop_collector(backend, stop_root, stop_socket)
+        stop_collector(backend, healthy_root, healthy_socket)
+    return detail
+
+
+def pause_restart_controls(backend, scratch, binary):
+    root = fresh_collector_root(scratch, "pr")
+    private_dir(root)
+    socket = os.path.join(root, "s")
+    shared = os.path.join(scratch, "pr-shared")
+    user = os.path.join(scratch, "pr-user")
+    log = os.path.join(scratch, "pr-log")
+    write_schema(shared, user, socket)
+    start_collector(backend, root, socket)
+    identities = {}
+    try:
+        enable_code, _, enable_err = run(
+            ["/usr/bin/python3", "-m", "archive.cli", "--socket", socket, "policy", "enable", "--expect-revision", "0"],
+            env={"PYTHONPATH": backend},
+        )
+        if enable_code != 0:
+            return {"passed": False, "reason": "enable failed", "error": enable_err}, {}
+        reports = {}
+        for role, scenario in (
+            ("baseline", "pause-baseline"),
+            ("paused", "pause-local"),
+        ):
+            if role == "paused":
+                run(
+                    ["/usr/bin/python3", "-m", "archive.cli", "--socket", socket, "policy", "pause", "--expect-revision", "1"],
+                    env={"PYTHONPATH": backend},
+                )
+            report = os.path.join(root, scenario + ".json")
+            code, _, _, _ = harness(binary, shared, user, log, socket, scenario, report)
+            body = json.load(open(report)) if os.path.exists(report) else {}
+            reports[role] = {"exit": code, "failure_count": body.get("failure_count", 1)}
+            identities[role] = body.get("policy_identities") or {}
+        stop_collector(backend, root, socket)
+        start_collector(backend, root, socket)
+        report = os.path.join(root, "pause-restart.json")
+        code, _, _, _ = harness(binary, shared, user, log, socket, "pause-local", report)
+        body = json.load(open(report)) if os.path.exists(report) else {}
+        reports["restarted"] = {"exit": code, "failure_count": body.get("failure_count", 1)}
+        identities["restarted"] = body.get("policy_identities") or {}
+        run(
+            ["/usr/bin/python3", "-m", "archive.cli", "--socket", socket, "policy", "resume", "--expect-revision", "2"],
+            env={"PYTHONPATH": backend},
+        )
+        report = os.path.join(root, "resume-local.json")
+        code, _, _, _ = harness(binary, shared, user, log, socket, "resume-local", report)
+        body = json.load(open(report)) if os.path.exists(report) else {}
+        reports["resumed"] = {"exit": code, "failure_count": body.get("failure_count", 1)}
+        identities["resumed"] = body.get("policy_identities") or {}
+        cli(backend, socket, "checkpoint")
+        query_code, rows, query_err = query_payloads(backend, socket)
+        relation = pause_restart_relation(rows, identities)
+        relation["scenario_exits"] = reports
+        relation["query_exit"] = query_code
+        if query_code != 0:
+            relation["passed"] = False
+            relation["query_error"] = "query failed"
+        if any(item.get("failure_count", 1) != 0 or item.get("exit", 1) != 0 for item in reports.values()):
+            relation["passed"] = False
+        return relation, {"identities": {key: value for key, value in identities.items()}}
+    finally:
+        stop_collector(backend, root, socket)
+
+
+def structural_walkthrough(backend, socket, process_id, destination):
+    """Record the actual Timeline and private-detail commands, without copying payload text."""
+    timeline_code, timeline, timeline_err = cli(
+        backend, socket, "query", "timeline", "--page-size", "20",
+    )
+    detail_code, detail, detail_err = cli(
+        backend, socket, "query", "process", "--process-id", process_id, "--private-detail", "--page-size", "20",
+    )
+    timeline_body = timeline.get("body") or {}
+    detail_body = detail.get("body") or {}
+    timeline_rows = timeline_body.get("observations") or []
+    detail_rows = detail_body.get("observations") or []
+    matched = [row for row in detail_rows if row.get("process_id") == process_id]
+    steps = [
+        "archive.cli --socket <allocated> query timeline --page-size 20 --json",
+        "archive.cli --socket <allocated> query process --process-id %s --private-detail --page-size 20 --json" % process_id,
+    ]
+    transcript = {
+        "steps": steps,
+        "timeline_exit": timeline_code,
+        "timeline_returned": timeline_body.get("returned"),
+        "timeline_ordering": timeline_body.get("ordering"),
+        "timeline_content_included": timeline.get("content_included"),
+        "private_detail_exit": detail_code,
+        "private_detail": detail_body.get("private_detail"),
+        "private_detail_content_included": detail.get("content_included"),
+        "process_id": process_id,
+        "matched_observation_count": len(matched),
+        "matched_kinds": sorted({row.get("observation_kind") for row in matched}),
+        "matched_schema_ids": sorted({row.get("schema_id") for row in matched if row.get("schema_id")}),
+        "host_persistence": "unknown",
+        "content_included": False,
+    }
+    lines = [
+        "Timeline/private-detail walkthrough",
+        "host persistence unknown; payload text is not copied into this transcript",
+        "1. %s" % steps[0],
+        "   exit=%s returned=%s ordering=%s content_included=%s" % (
+            timeline_code, timeline_body.get("returned"), timeline_body.get("ordering"), timeline.get("content_included"),
+        ),
+        "2. %s" % steps[1],
+        "   exit=%s private_detail=%s matched=%s kinds=%s schemas=%s" % (
+            detail_code, detail_body.get("private_detail"), len(matched),
+            ",".join(transcript["matched_kinds"]), ",".join(transcript["matched_schema_ids"]),
+        ),
+    ]
+    if timeline_err and timeline_code != 0:
+        lines.append("timeline_error=query_failed")
+    if detail_err and detail_code != 0:
+        lines.append("private_detail_error=query_failed")
+    write_private(destination, "\n".join(lines) + "\n")
+    passed = (
+        timeline_code == 0 and detail_code == 0
+        and (timeline_body.get("returned") or 0) > 0
+        and detail_body.get("private_detail") is True
+        and bool(matched)
+        and timeline.get("content_included") is not True
+    )
+    return {"passed": passed, "transcript": transcript}
+
+
 def contract(args):
     scratch = os.path.join(args.scratch, "contract-" + uuid.uuid4().hex)
     shared = os.path.join(scratch, "shared")
@@ -1006,7 +1800,13 @@ def contract(args):
     private_dir(scratch)
     write_schema(shared, user, socket)
     probes = run_probes(os.path.join(args.root, "probes"))
-    binary = compile_harness(os.getcwd(), os.path.join(args.root, "build"))
+    isolated_root, isolated_head = export_isolated_checkout(args.scratch)
+    binary = compile_harness(
+        os.getcwd(),
+        os.path.join(args.root, "build"),
+        source_root=isolated_root,
+        library_dir=os.path.join(os.getcwd(), "lib"),
+    )
     start_collector(args.backend, root, socket)
     binding_old_root = fresh_collector_root(args.scratch, "bo")
     binding_new_root = fresh_collector_root(args.scratch, "bn")
@@ -1039,6 +1839,10 @@ def contract(args):
         cli(args.backend, socket, "checkpoint")
         edge_report = os.path.join(args.root, "transition-edge.json")
         edge_code, _, _, _ = harness(binary, shared, user, log, socket, "transition-edge", edge_report)
+        edge_body = json.load(open(edge_report)) if os.path.exists(edge_report) else {}
+        gates_report = os.path.join(args.root, "terminal-gates.json")
+        gates_code, _, _, _ = harness(binary, shared, user, log, socket, "terminal-gates", gates_report)
+        gates_body = json.load(open(gates_report)) if os.path.exists(gates_report) else {}
         provenance_report = os.path.join(args.root, "terminal-provenance.json")
         provenance_code, _, _, _ = harness(
             binary, shared, user, log, socket, "terminal-provenance", provenance_report
@@ -1161,7 +1965,7 @@ def contract(args):
             "eligibility_exclusion": all(schema_gate.values()),
             "provenance_continuity": len({row.get("process_id") for row in observations}) > 1,
             "raw_terminal_process_continuity": relation_evidence.get("raw_terminal_process_continuity") is True,
-            "no_unobserved_prefix_admitted": relation_evidence.get("no_unobserved_prefix_admitted") is True,
+            "no_unobserved_prefix_admitted": False,
             "eligible_content_still_recorded": relation_evidence.get("eligible_content_still_recorded") is True,
             "global_raw_terminal_persisted": relation_evidence.get("global_raw_terminal_persisted") is True,
             "global_unavailable_terminal_content_free": relation_evidence.get("global_unavailable_terminal_content_free") is True,
@@ -1169,13 +1973,14 @@ def contract(args):
             "stale_policy_reply_ignored": binding_evidence["stale_policy_not_persisted"] and binding_evidence["current_policy_positive_control"],
             "rebind_destination_isolation": all(binding_evidence.values()),
             "fault_nonblocking": all(sig.values()),
-            "held_fault_and_bounded_queue": all(faults.values()) and bool(faults),
+            "held_fault_and_bounded_queue": False,
             "concurrent_management_query": faults.get("concurrent_management_query") is True,
             "policy_pause_restart": (status.get("body") or {}).get("legacy_switch_changed") is False,
             "five_probes": all(value == "pass" for value in probes.values()),
             "no_cwd_or_stdout_leak": body.get("cwd_unchanged") is True and not leaked,
         }
-        # Pause, restart, and absent-collector checks.
+        # Pause, restart, and absent-collector checks. The stored relation, not
+        # desired_policy alone, is the pass condition.
         run(["/usr/bin/python3", "-m", "archive.cli", "--socket", socket, "policy", "pause", "--expect-revision", "1"], env={"PYTHONPATH": args.backend})
         stop_collector(args.backend, root, socket)
         absent_report = os.path.join(args.root, "harness-absent.json")
@@ -1183,7 +1988,68 @@ def contract(args):
         evidence["fault_nonblocking"] = absent_code == 0 and all(sig.values())
         start_collector(args.backend, root, socket)
         _, restarted, _ = cli(args.backend, socket, "status")
-        evidence["policy_pause_restart"] = (restarted.get("body") or {}).get("desired_policy") == "paused"
+        collector_stayed_paused = (restarted.get("body") or {}).get("desired_policy") == "paused"
+        gate_ids = gates_body.get("terminal_gate_identities") or {}
+        idle_relation = idle_terminal_relation(rows, gate_ids)
+        unavailable_relation = confirmed_unavailable_relation(rows, gate_ids)
+        schema_relation = schema_excluded_unavailable_relation(rows, gate_ids)
+        uninserted_relation = uninserted_commit_relation(rows, gate_ids)
+        equal_relation = equal_text_relation(rows, gate_ids)
+        transition_relation = mid_composition_relation(rows, edge_body.get("transition_identities") or {})
+        fixture_root = fresh_collector_root(args.scratch, "fx")
+        private_dir(fixture_root)
+        fixture_socket = os.path.join(fixture_root, "s")
+        fixture_shared = os.path.join(args.scratch, "fx-shared")
+        fixture_user = os.path.join(args.scratch, "fx-user")
+        fixture_log = os.path.join(args.scratch, "fx-log")
+        write_schema(fixture_shared, fixture_user, fixture_socket)
+        start_collector(args.backend, fixture_root, fixture_socket)
+        try:
+            run(
+                ["/usr/bin/python3", "-m", "archive.cli", "--socket", fixture_socket, "policy", "enable", "--expect-revision", "0"],
+                env={"PYTHONPATH": args.backend},
+            )
+            fixture_report = os.path.join(args.root, "association-fixtures.json")
+            fixture_code, _, _, _ = harness(
+                binary, fixture_shared, fixture_user, fixture_log, fixture_socket, "fixtures", fixture_report
+            )
+            fixture_body = json.load(open(fixture_report)) if os.path.exists(fixture_report) else {}
+            cli(args.backend, fixture_socket, "checkpoint")
+            fixture_status_code, fixture_status, _ = status_body(args.backend, fixture_socket)
+            fixture_query_code, fixture_rows, _ = query_payloads(args.backend, fixture_socket)
+        finally:
+            stop_collector(args.backend, fixture_root, fixture_socket)
+        association = association_relation(fixture_rows, fixture_status, fixture_body.get("association_identities") or {})
+        if fixture_code != 0 or fixture_body.get("failure_count", 1) != 0 or fixture_status_code != 0 or fixture_query_code != 0:
+            association["passed"] = False
+        fault_detail = collector_fault_relations(args.backend, args.scratch, binary, shared, user, log)
+        pause_relation, pause_detail = pause_restart_controls(args.backend, args.scratch, binary)
+        evidence["idle_deactivation_opens_no_process"] = (
+            gates_code == 0 and gates_body.get("failure_count", 1) == 0 and idle_relation.get("passed") is True
+        )
+        evidence["confirmed_unavailable_terminal"] = unavailable_relation.get("passed") is True
+        evidence["unavailable_schema_exclusion"] = schema_relation.get("passed") is True
+        evidence["uninserted_commit_not_archived"] = uninserted_relation.get("passed") is True
+        evidence["equal_text_distinct_processes"] = equal_relation.get("passed") is True
+        evidence["association_stored_relations"] = association.get("passed") is True
+        evidence["no_unobserved_prefix_admitted"] = (
+            edge_code == 0 and edge_body.get("failure_count", 1) == 0 and transition_relation.get("passed") is True
+        )
+        evidence["held_fault_and_bounded_queue"] = (
+            faults.get("absent_collector_burst") is True
+            and faults.get("concurrent_management_query") is True
+            and all(item.get("passed") is True for item in fault_detail.values())
+            and bool(fault_detail)
+        )
+        evidence["policy_pause_restart"] = collector_stayed_paused and pause_relation.get("passed") is True
+        walk_process = gate_ids.get("inserted_process_id") or (rows[0].get("process_id") if rows else "")
+        walkthrough = structural_walkthrough(
+            args.backend, socket, walk_process, os.path.join(args.root, "walkthrough.txt")
+        )
+        evidence["isolated_checkout_walkthrough"] = (
+            isolated_head == run(["git", "rev-parse", "HEAD"])[1].strip()
+            and walkthrough.get("passed") is True
+        )
         passed = (
             all(evidence.values())
             and body.get("failure_count", 1) == 0
@@ -1223,6 +2089,25 @@ def contract(args):
                 "transition_edge": edge_code,
                 "terminal_provenance": provenance_code,
                 "excluded_terminal": excluded_code,
+                "terminal_gates": gates_code,
+                "association_fixtures": fixture_code,
+            },
+            "persisted_relations": {
+                "idle_terminal": idle_relation,
+                "confirmed_unavailable": unavailable_relation,
+                "schema_excluded_unavailable": schema_relation,
+                "uninserted_commit": uninserted_relation,
+                "equal_text": equal_relation,
+                "association": association,
+                "mid_composition": transition_relation,
+                "pause_restart": pause_relation,
+                "faults": fault_detail,
+                "walkthrough": walkthrough.get("transcript"),
+            },
+            "isolated_checkout": {
+                "head": isolated_head,
+                "path_recorded": True,
+                "source_root_name": os.path.basename(isolated_root),
             },
             "failure_count": body.get("failure_count", 1),
             "observation_kinds": sorted(kinds),
@@ -1231,7 +2116,6 @@ def contract(args):
             "backend_tree": BACKEND_TREE,
         }
         write_private(args.report, json.dumps(public, indent=2, sort_keys=True) + "\n")
-        write_private(os.path.join(args.root, "walkthrough.txt"), "invented luna_pinyin timeline queried via process private_detail; host persistence unknown\n")
         return 0 if passed else 1
     finally:
         for collector_root, collector_socket in reversed(binding_started):
@@ -1286,7 +2170,7 @@ def write_timing_blocker_plan(path):
     plan = {
         "procedure": "MEAS-189-v1",
         "contract": "AC-189-v1",
-        "attempt": 4,
+        "attempt": 5,
         "preflight_only": True,
         "quiet_window": {
             "confirmed": False,
@@ -1576,13 +2460,13 @@ def main():
     parser.add_argument("--backend-source", default=".local/ac189-a3-backend")
     parser.add_argument("--suite", choices=("contract", "timing"))
     parser.add_argument("--root", default="")
-    parser.add_argument("--backend", default=".local/ac189-a4-backend")
+    parser.add_argument("--backend", default=".local/ac189-a5-backend")
     parser.add_argument(
         "--scratch",
-        default="/private/var/folders/lx/7h393vfs5j386qt400zvx5ww0000gn/T/opencode/a189/e4",
+        default="/private/var/folders/lx/7h393vfs5j386qt400zvx5ww0000gn/T/opencode/a189/a5",
     )
     parser.add_argument("--report", default="")
-    parser.add_argument("--plan", default=".local/ac189-a4-measurement-plan.json")
+    parser.add_argument("--plan", default=".local/ac189-a5-measurement-plan.json")
     args = parser.parse_args()
     if args.self_test:
         return self_test()
@@ -1594,9 +2478,9 @@ def main():
         sys.stderr.write("code=invalid_request\n")
         return 2
     if not args.root:
-        args.root = ".local/ac189-a4-check" if args.suite == "contract" else ".local/ac189-a4-timing"
+        args.root = ".local/ac189-a5-check" if args.suite == "contract" else ".local/ac189-a5-timing"
     if not args.report:
-        args.report = ".local/ac189-a4-report.json" if args.suite == "contract" else ".local/ac189-a4-timing-report.json"
+        args.report = ".local/ac189-a5-report.json" if args.suite == "contract" else ".local/ac189-a5-timing-report.json"
     if os.path.lexists(args.report):
         sys.stderr.write("code=output_collision path=%s\n" % args.report)
         return 2

@@ -150,7 +150,7 @@ The text path is:
 
 `NSEvent` -> `SquirrelInputController.handle` -> `processKey` -> `rimeAPI.process_key` -> `rimeUpdate` -> `get_commit`/`get_status`/`get_context` -> `client.insertText` and/or `client.setMarkedText` plus `SquirrelPanel.update`.
 
-Optional input-archive observation copies those already-materialized strings after the engine call and admits them on a background socket. It does not add a candidate request, a second panel refresh, or a commit. Capture stays off unless `input_archive/socket` is set and the collector policy is locally observed as enabled. See `docs/input-archive-frontend.md`.
+Optional input-archive observation copies those already-materialized strings after the engine call and admits them on a background socket. It does not add a candidate request, a second panel refresh, or a commit. Capture stays off unless `input_archive/socket` is set and the collector policy is locally observed as enabled. An empty composition is not recorded as an unavailable client. Commit text is archived only after `insertText` returns; a commit that does not insert is not claimed as an insertion. See `docs/input-archive-frontend.md`.
 
 ## Marked Text and Commit Rules
 

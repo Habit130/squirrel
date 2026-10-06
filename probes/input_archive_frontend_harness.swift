@@ -84,6 +84,11 @@ enum InputArchiveFrontendHarness {
   static var globalFinalizationIdentities: [String: String] = [:]
   static var terminalProvenanceIdentities: [String: String] = [:]
   static var excludedTerminalIdentities: [String: String] = [:]
+  static var terminalGateIdentities: [String: String] = [:]
+  static var associationIdentities: [String: String] = [:]
+  static var transitionIdentities: [String: String] = [:]
+  static var policyIdentities: [String: String] = [:]
+  static var queueSaturationStatus: [String: String] = [:]
   static var timingPreflightStatus: [String: Any] = [:]
 
   static func main() {
@@ -156,6 +161,16 @@ enum InputArchiveFrontendHarness {
       runFaultBurst()
     case "concurrent-status":
       runConcurrentStatus()
+    case "terminal-gates":
+      runTerminalGates()
+    case "pause-baseline":
+      runPauseBaseline()
+    case "pause-local":
+      runPauseLocal()
+    case "resume-local":
+      runResumeLocal()
+    case "queue-saturate":
+      runQueueSaturate()
     case "socket-call":
       runSocketCall(socket: arguments["socket"] ?? "")
     case "sender-call":
@@ -341,50 +356,86 @@ enum InputArchiveFrontendHarness {
   }
 
   static func runAssociationFixtures() {
+    expect(waitForPolicy("enabled"), "association fixtures need a fresh enabled policy")
     let source = InputArchiveEngine.shared.sourceInstanceId
-    let first = InputArchiveEngine.shared.admitFixture([
+    let retryObservation: [String: Any] = [
       "schema_id": InputArchive.supportedSchema,
       "source_local_sequence": 900001,
       "observation_kind": "commit_attempt",
       "process_id": "procfixture1",
+      "update_id": "upd-fixture-retry",
+      "continuity_segment_id": "segfixture1",
       "outcome": "observed_attempt",
       "host_persistence": "unknown",
-      "payload": ["text": "INV-EQUAL"]
-    ])
-    let retry = InputArchiveEngine.shared.admitFixture([
-      "schema_id": InputArchive.supportedSchema,
-      "source_local_sequence": 900001,
-      "observation_kind": "commit_attempt",
-      "process_id": "procfixture1",
-      "outcome": "observed_attempt",
-      "host_persistence": "unknown",
-      "payload": ["text": "INV-EQUAL"]
-    ])
+      "payload": ["text": "INV-EQUAL", "operation": "association_retry"]
+    ]
+    let first = InputArchiveEngine.shared.admitFixture(retryObservation)
+    let retry = InputArchiveEngine.shared.admitFixture(retryObservation)
     let conflict = InputArchiveEngine.shared.admitFixture([
       "schema_id": InputArchive.supportedSchema,
       "source_local_sequence": 900001,
       "observation_kind": "commit_attempt",
       "process_id": "procfixture1",
+      "update_id": "upd-fixture-conflict",
+      "continuity_segment_id": "segfixture1",
       "outcome": "observed_attempt",
       "host_persistence": "unknown",
-      "payload": ["text": "INV-CONFLICT"]
+      "payload": ["text": "INV-CONFLICT", "operation": "association_conflict"]
     ])
     let missing = InputArchiveEngine.shared.admitFixture([
       "schema_id": InputArchive.supportedSchema,
+      "source_local_sequence": 900003,
       "observation_kind": "input_change",
       "process_id": "procfixture2",
       "parent_update_id": "upd-missing-parent",
       "update_id": "upd-child",
+      "continuity_segment_id": "segfixture2",
       "outcome": "input_change",
-      "payload": ["text": "INV-ORDER"]
+      "payload": ["text": "INV-MISSING", "operation": "association_missing"]
     ])
-    InputArchiveEngine.shared.recordUnknown(schema: InputArchive.supportedSchema)
-    _ = source
-    _ = first
-    _ = retry
-    _ = conflict
-    _ = missing
-    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+    let child = InputArchiveEngine.shared.admitFixture([
+      "schema_id": InputArchive.supportedSchema,
+      "source_local_sequence": 900004,
+      "observation_kind": "input_change",
+      "process_id": "procfixture3",
+      "parent_update_id": "upd-later-parent",
+      "update_id": "upd-early-child",
+      "continuity_segment_id": "segfixture3",
+      "outcome": "input_change",
+      "payload": ["text": "INV-ORDER-CHILD", "operation": "association_order"]
+    ])
+    let parent = InputArchiveEngine.shared.admitFixture([
+      "schema_id": InputArchive.supportedSchema,
+      "source_local_sequence": 900005,
+      "observation_kind": "input_change",
+      "process_id": "procfixture3",
+      "update_id": "upd-later-parent",
+      "continuity_segment_id": "segfixture3",
+      "outcome": "input_change",
+      "payload": ["text": "INV-ORDER-PARENT", "operation": "association_order"]
+    ])
+    expect(first.admitted, "association retry original was not queued")
+    expect(retry.admitted, "association retry was not queued with the same capture identity")
+    expect(conflict.admitted, "association conflict was not queued")
+    expect(missing.admitted, "association missing-parent fixture was not queued")
+    expect(child.admitted && parent.admitted, "association out-of-order fixtures were not queued")
+    expect(InputArchiveEngine.shared.waitUntilDrained(timeout: 5), "association fixtures did not drain")
+    associationIdentities = [
+      "source_instance_id": source,
+      "retry_sequence": "900001",
+      "retry_process_id": "procfixture1",
+      "retry_update_id": "upd-fixture-retry",
+      "conflict_sequence": "900001",
+      "missing_sequence": "900003",
+      "missing_process_id": "procfixture2",
+      "missing_parent_update_id": "upd-missing-parent",
+      "missing_update_id": "upd-child",
+      "order_process_id": "procfixture3",
+      "order_child_sequence": "900004",
+      "order_child_update_id": "upd-early-child",
+      "order_parent_sequence": "900005",
+      "order_parent_update_id": "upd-later-parent"
+    ]
   }
 
   static func runTiming() {
@@ -578,20 +629,41 @@ enum InputArchiveFrontendHarness {
     typeCode("jiamin")
     clearComposition()
     type("niha")
+    let excludedProcess = InputArchiveEngine.shared.processId
+    let excludedSegment = InputArchiveEngine.shared.segmentId
+    let excludedUpdate = InputArchiveEngine.shared.updateId
     InputArchiveSignals.secureEventInputEnabled = previous
+    let cut = InputArchiveEngine.shared.contentFreeStatus()
     type("o")
     sendKey(49, " ")
     let inserts = client.inserts
     expect(inserts.contains { $0.contains("你好") }, "mid-transition commit missing from client")
     expect(inserts.filter { $0.contains("你好") }.count == 1, "mid-transition commit was not inserted exactly once")
     _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+    let afterUnobservedCommit = InputArchiveEngine.shared.contentFreeStatus()
     selectLuna()
     clearComposition()
     client.reset()
     typeCode("jiazheng")
+    let nextProcess = InputArchiveEngine.shared.processId
+    let nextSegment = InputArchiveEngine.shared.segmentId
+    let nextUpdate = InputArchiveEngine.shared.updateId
     sendKey(49, " ")
     expect(client.inserts.contains { $0.contains("甲正") }, "post-transition eligible commit missing from client")
+    expect(nextProcess != excludedProcess, "mid-transition eligible composition reused the unobserved process")
     _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+    transitionIdentities = [
+      "source_instance_id": InputArchiveEngine.shared.sourceInstanceId,
+      "excluded_process_id": excludedProcess,
+      "excluded_segment_id": excludedSegment,
+      "excluded_update_id": excludedUpdate,
+      "cut_sequence": cut["source_local_sequence"] ?? "0",
+      "unobserved_commit_sequence": afterUnobservedCommit["source_local_sequence"] ?? "0",
+      "next_process_id": nextProcess,
+      "next_segment_id": nextSegment,
+      "next_update_id": nextUpdate,
+      "sequence_after": InputArchiveEngine.shared.contentFreeStatus()["source_local_sequence"] ?? "0"
+    ]
   }
 
   /// Finalizes a live composition through deactivation so the stored raw
@@ -700,6 +772,227 @@ enum InputArchiveFrontendHarness {
     expect(client.inserts.contains { $0.contains("甲敏") }, "sensitive commit missing from client")
     InputArchiveSignals.secureEventInputEnabled = previous
     _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+  }
+
+  /// Idle, unavailable, uninserted-commit, and equal-text controls on the
+  /// production controller. Identities are queried later; this method does not
+  /// decide the archive result from a local boolean.
+  static func runTerminalGates() {
+    expect(waitForPolicy("enabled"), "terminal-gates policy did not become effective")
+    let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
+    guard let controller else {
+      fail("terminal-gates controller unavailable")
+      return
+    }
+    selectLuna()
+    clearComposition()
+    client.reset()
+    InputArchiveEngine.shared.noteContinuityCut("deactivation")
+    let idlePending = controller.compositionFinalizationState(rimeAvailable: true).pendingInput ?? ""
+    expect(idlePending.isEmpty, "idle control still has pending input")
+    let idleProcess = InputArchiveEngine.shared.processId
+    let idleSequence = InputArchiveEngine.shared.contentFreeStatus()["source_local_sequence"] ?? "0"
+    let insertsBeforeIdle = client.inserts
+    controller.commitComposition(client)
+    controller.deactivateServer(client)
+    controller.activateServer(client)
+    expect(client.inserts == insertsBeforeIdle, "idle deactivation inserted text")
+    expect(!InputArchiveEngine.shared.processOpen, "idle deactivation left a process open")
+    let idleSequenceAfter = InputArchiveEngine.shared.contentFreeStatus()["source_local_sequence"] ?? "0"
+    expect(idleSequenceAfter == idleSequence, "idle deactivation advanced the capture sequence")
+
+    selectLuna()
+    clearComposition()
+    client.reset()
+    typeCode("nihao")
+    let unavailablePending = controller.compositionFinalizationState(rimeAvailable: true).pendingInput ?? ""
+    expect(!unavailablePending.isEmpty, "unavailable control has no pending input")
+    expect(InputArchiveEngine.shared.processOpen, "unavailable control did not observe its composition")
+    let unavailableProcess = InputArchiveEngine.shared.processId
+    let unavailableSegment = InputArchiveEngine.shared.segmentId
+    let unavailableSchema = controller.currentOperationSchema()
+    let insertsBeforeUnavailable = client.inserts
+    controller.archiveSetClientForFixture(nil)
+    controller.commitComposition(NSObject())
+    expect(client.inserts == insertsBeforeUnavailable, "unavailable terminal invented an insert")
+    controller.archiveSetClientForFixture(client)
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+
+    InputArchiveEngine.shared.noteContinuityCut("deactivation")
+    selectOtherSchema()
+    clearComposition()
+    client.reset()
+    typeCode("jiachi")
+    let otherSchema = controller.currentOperationSchema()
+    expect(otherSchema == "other_schema", "non-Luna control did not select other_schema")
+    let otherProcess = InputArchiveEngine.shared.processId
+    let insertsBeforeOther = client.inserts
+    controller.archiveSetClientForFixture(nil)
+    controller.commitComposition(NSObject())
+    expect(client.inserts == insertsBeforeOther, "non-Luna unavailable terminal invented an insert")
+    controller.archiveSetClientForFixture(client)
+    InputArchiveEngine.shared.noteContinuityCut("deactivation")
+    let unknownProcess = InputArchiveEngine.shared.processId
+    InputArchiveEngine.shared.recordUnavailable(schema: "")
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+
+    selectLuna()
+    clearComposition()
+    controller.archiveSetClientForFixture(client)
+    client.reset()
+    typeCode("nihao")
+    let insertedProcess = InputArchiveEngine.shared.processId
+    sendKey(49, " ")
+    expect(client.inserts.contains { $0.contains("你好") }, "inserted commit missing from client")
+    let insertedSequence = InputArchiveEngine.shared.contentFreeStatus()["source_local_sequence"] ?? "0"
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+
+    clearComposition()
+    client.reset()
+    typeCode("jiazheng")
+    expect(InputArchiveEngine.shared.processOpen, "uninserted commit did not observe its composition")
+    let uninsertedProcess = InputArchiveEngine.shared.processId
+    let uninsertedSegment = InputArchiveEngine.shared.segmentId
+    let insertsBeforeUninserted = client.inserts
+    controller.archiveSetClientForFixture(nil)
+    let space = keyEvent(keyCode: 49, characters: " ", flags: [])
+    _ = controller.handle(space, client: nil)
+    expect(client.inserts == insertsBeforeUninserted, "uninserted commit wrote host text")
+    controller.archiveSetClientForFixture(client)
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+
+    clearComposition()
+    client.reset()
+    typeCode("nihao")
+    let equalFirstProcess = InputArchiveEngine.shared.processId
+    sendKey(49, " ")
+    clearComposition()
+    typeCode("nihao")
+    let equalSecondProcess = InputArchiveEngine.shared.processId
+    sendKey(49, " ")
+    expect(equalFirstProcess != equalSecondProcess, "equal-text compositions reused one process")
+    expect(client.inserts.filter { $0.contains("你好") }.count >= 2, "equal-text commits were not inserted twice")
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+
+    terminalGateIdentities = [
+      "source_instance_id": InputArchiveEngine.shared.sourceInstanceId,
+      "idle_process_id": idleProcess,
+      "idle_sequence": idleSequence,
+      "unavailable_process_id": unavailableProcess,
+      "unavailable_segment_id": unavailableSegment,
+      "unavailable_schema": unavailableSchema,
+      "other_schema": otherSchema,
+      "other_process_id": otherProcess,
+      "unknown_process_id": unknownProcess,
+      "inserted_process_id": insertedProcess,
+      "inserted_sequence": insertedSequence,
+      "uninserted_process_id": uninsertedProcess,
+      "uninserted_segment_id": uninsertedSegment,
+      "equal_first_process_id": equalFirstProcess,
+      "equal_second_process_id": equalSecondProcess,
+      "sequence_after": InputArchiveEngine.shared.contentFreeStatus()["source_local_sequence"] ?? "0"
+    ]
+  }
+
+  static func runPauseBaseline() {
+    expect(waitForPolicy("enabled"), "pause baseline policy did not become effective")
+    let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
+    selectLuna()
+    clearComposition()
+    client.reset()
+    typeCode("jiazheng")
+    let process = InputArchiveEngine.shared.processId
+    let segment = InputArchiveEngine.shared.segmentId
+    sendKey(49, " ")
+    expect(client.inserts.contains { $0.contains("甲正") }, "pause baseline commit missing from client")
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+    let status = InputArchiveEngine.shared.contentFreeStatus()
+    policyIdentities = [
+      "role": "baseline",
+      "source_instance_id": InputArchiveEngine.shared.sourceInstanceId,
+      "process_id": process,
+      "segment_id": segment,
+      "sequence_after": status["source_local_sequence"] ?? "0",
+      "observed_desired": status["observed_desired"] ?? "",
+      "fresh": status["fresh"] ?? ""
+    ]
+  }
+
+  static func runPauseLocal() {
+    expect(waitForPolicy("paused"), "pause was not locally observed")
+    let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
+    selectLuna()
+    clearComposition()
+    client.reset()
+    let before = InputArchiveEngine.shared.contentFreeStatus()
+    typeCode("jiamin")
+    sendKey(49, " ")
+    expect(client.inserts.contains { $0.contains("甲敏") }, "paused input did not reach the client")
+    expect(before["observed_desired"] == "paused" && before["fresh"] == "true", "pause local status was not fresh")
+    let after = InputArchiveEngine.shared.contentFreeStatus()
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+    policyIdentities = [
+      "role": "paused",
+      "source_instance_id": InputArchiveEngine.shared.sourceInstanceId,
+      "process_id": before["process_id"] ?? "",
+      "segment_id": before["segment_id"] ?? "",
+      "sequence_before": before["source_local_sequence"] ?? "0",
+      "sequence_after": after["source_local_sequence"] ?? "0",
+      "observed_desired": before["observed_desired"] ?? "",
+      "fresh": before["fresh"] ?? ""
+    ]
+  }
+
+  static func runResumeLocal() {
+    expect(waitForPolicy("enabled"), "resume was not locally observed")
+    let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
+    selectLuna()
+    clearComposition()
+    client.reset()
+    typeCode("nihao")
+    let process = InputArchiveEngine.shared.processId
+    let segment = InputArchiveEngine.shared.segmentId
+    sendKey(49, " ")
+    expect(client.inserts.contains { $0.contains("你好") }, "resumed commit missing from client")
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+    let status = InputArchiveEngine.shared.contentFreeStatus()
+    policyIdentities = [
+      "role": "resumed",
+      "source_instance_id": InputArchiveEngine.shared.sourceInstanceId,
+      "process_id": process,
+      "segment_id": segment,
+      "sequence_after": status["source_local_sequence"] ?? "0",
+      "observed_desired": status["observed_desired"] ?? "",
+      "fresh": status["fresh"] ?? ""
+    ]
+  }
+
+  static func runQueueSaturate() {
+    selectLuna()
+    clearComposition()
+    client.reset()
+    let started = InputArchiveClock.now()
+    for _ in 0..<280 {
+      type("n")
+    }
+    let elapsed = InputArchiveClock.nanoseconds(from: InputArchiveClock.now() &- started)
+    expect(elapsed < 8_000_000_000, "queue saturation blocked input")
+    let status = InputArchiveEngine.shared.contentFreeStatus()
+    expect(status["content_included"] == "false", "queue saturation status exposed content")
+    expect(!client.marked.isEmpty || !client.inserts.isEmpty, "queue saturation produced no client update")
+    queueSaturationStatus = [
+      "known_dropped": status["known_dropped"] ?? "0",
+      "known_refused": status["known_refused"] ?? "0",
+      "content_included": "false"
+    ]
   }
 
   static func typeCode(_ spelling: String) {
@@ -997,6 +1290,11 @@ enum InputArchiveFrontendHarness {
       "global_finalization_identities": globalFinalizationIdentities,
       "terminal_provenance_identities": terminalProvenanceIdentities,
       "excluded_terminal_identities": excludedTerminalIdentities,
+      "terminal_gate_identities": terminalGateIdentities,
+      "association_identities": associationIdentities,
+      "transition_identities": transitionIdentities,
+      "policy_identities": policyIdentities,
+      "queue_saturation": queueSaturationStatus,
       "timing_preflight": timingPreflightStatus
     ]
     guard let path, let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted]) else {
