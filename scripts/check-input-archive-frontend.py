@@ -492,9 +492,9 @@ def compile_harness(root, probes, source_root=None, library_dir=None):
         for name in os.listdir(os.path.join(source_root, "sources"))
         if name.endswith(".swift") and name != "Main.swift"
     )
-    binary = os.path.join(app, "harness")
-    include = os.path.join(os.path.dirname(probes), "include")
-    stage_include_headers(os.path.join(root, ".local", "ac189-include"), include)
+    binary = os.path.abspath(os.path.join(app, "harness"))
+    include = os.path.abspath(os.path.join(os.path.dirname(probes), "include"))
+    stage_include_headers(os.path.join(os.path.abspath(root), ".local", "ac189-include"), include)
     command = [
         "xcrun", "swiftc", "-parse-as-library", "-swift-version", "5",
         "-enable-bare-slash-regex", "-O",
