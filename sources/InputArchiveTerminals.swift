@@ -155,4 +155,10 @@ extension InputArchiveEngine {
     updateId = ""
     lock.unlock()
   }
+
+  /// An empty pending composition is a boundary, not an unavailable client.
+  /// Close the unobserved flag without opening a process or persisting a row.
+  func noteEmptyInputBoundary() {
+    closeExcludedComposition()
+  }
 }

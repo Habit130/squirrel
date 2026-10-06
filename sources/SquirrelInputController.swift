@@ -283,10 +283,11 @@ final class SquirrelInputController: IMKInputController {
     let input = rimeAPI.get_input(session).map { String(cString: $0) }
     if let owned = input, !owned.isEmpty {
       commitRawFinalization(owned, schema: operationSchema)
+    } else {
+      // Empty pending input is not an unavailable client. Close the boundary
+      // without opening a process or persisting a terminal.
+      InputArchiveEngine.shared.noteEmptyInputBoundary()
     }
-    // Empty pending input is not an unavailable client. Idle deactivation must
-    // not open a process or persist a terminal. A known pending composition
-    // whose client is unavailable is recorded inside commitRawFinalization.
     rimeAPI.clear_composition(session)
   }
 

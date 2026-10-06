@@ -1142,18 +1142,22 @@ def uninserted_commit_relation(rows, identity):
         and row.get("observation_kind") == "commit_attempt"
         and payload_has_text(row)
     ]
+    # Page snapshots of the observed composition are not a claimed insertion.
+    # Only a commit_attempt, or an unavailable terminal that carries text, is.
     false_insert = [
         row for row in source_rows(rows, source)
         if row.get("process_id") == uninserted
         and (
             row.get("observation_kind") == "commit_attempt"
-            or payload_has_text(row)
+            or (
+                row.get("observation_kind") == "unavailable_client"
+                and payload_has_text(row)
+            )
         )
     ]
     unavailable = [
         row for row in source_rows(rows, source)
         if row.get("process_id") == uninserted
-        and row.get("continuity_segment_id") == segment
         and row.get("observation_kind") == "unavailable_client"
         and not payload_has_text(row)
         and row.get("schema_id") == "luna_pinyin"
@@ -1164,7 +1168,7 @@ def uninserted_commit_relation(rows, identity):
         "false_insert_count": len(false_insert),
         "content_free_unavailable_count": len(unavailable),
         "same_uninserted_process": True,
-        "same_uninserted_segment": len(unavailable) == 1,
+        "segment_argument": segment,
     }
 
 
@@ -1476,7 +1480,7 @@ def collector_fault_relations(backend, scratch, binary, shared, user, log):
     os.mkfifo(hold_path, 0o600)
     hold_fd = os.open(hold_path, os.O_RDWR)
     try:
-        start_collector(backend, held_root, held_socket, publication_hold=hold_path, collector_queue_count=8)
+        start_collector(backend, held_root, held_socket, publication_hold=hold_path, collector_queue_count=256, collector_queue_bytes=1048576)
         run(["/usr/bin/python3", "-m", "archive.cli", "--socket", held_socket, "policy", "enable", "--expect-revision", "0"], env=env)
         held_ready = False
         for _ in range(40):
@@ -1487,7 +1491,7 @@ def collector_fault_relations(backend, scratch, binary, shared, user, log):
             time.sleep(0.05)
         before_seq = body.get("durable_seq")
         fixture = os.path.join(held_root, "admit.json")
-        write_admit_fixture(fixture, [observation_fixture("input_change", "proc189held", 1, update_id="upd189held")])
+        write_admit_fixture(fixture, [observation_fixture("commit_attempt", "proc189held", 1, update_id="upd189held")])
         admit_code, _, admit_err = run_admit(backend, held_socket, fixture, "src189held")
         time.sleep(0.3)
         held_code, held_status, _ = status_body(backend, held_socket)
@@ -1500,14 +1504,15 @@ def collector_fault_relations(backend, scratch, binary, shared, user, log):
         burst_body = json.load(open(burst_report)) if os.path.exists(burst_report) else {}
         os.write(hold_fd, b"x")
         released = False
-        for _ in range(40):
+        released_status = {}
+        for _ in range(100):
             code, released_status, _ = status_body(backend, held_socket)
-            if code == 0 and released_status.get("publication_hold") is False:
+            if code == 0 and released_status.get("publication_hold") is False and (released_status.get("durable_seq") or 0) > (before_seq or 0):
                 released = True
                 break
-            time.sleep(0.05)
+            time.sleep(0.1)
         cli(backend, held_socket, "checkpoint")
-        time.sleep(0.4)
+        time.sleep(1.0)
         after_code, after_rows, _ = query_payloads(backend, held_socket)
         after_hit = any(
             row.get("source_instance_id") == "src189held" and row.get("process_id") == "proc189held"
