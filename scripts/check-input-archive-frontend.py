@@ -1458,9 +1458,10 @@ def export_isolated_checkout(scratch):
 
 
 def frontend_fixture_dirs(scratch, label, socket):
-    shared = os.path.join(scratch, label + "-shared")
-    user = os.path.join(scratch, label + "-user")
-    log = os.path.join(scratch, label + "-log")
+    suffix = uuid.uuid4().hex[:8]
+    shared = os.path.join(scratch, label + "-shared-" + suffix)
+    user = os.path.join(scratch, label + "-user-" + suffix)
+    log = os.path.join(scratch, label + "-log-" + suffix)
     write_schema(shared, user, socket)
     return shared, user, log
 
@@ -1674,9 +1675,10 @@ def pause_restart_controls(backend, scratch, binary):
     root = fresh_collector_root(scratch, "pr")
     private_dir(root)
     socket = os.path.join(root, "s")
-    shared = os.path.join(scratch, "pr-shared")
-    user = os.path.join(scratch, "pr-user")
-    log = os.path.join(scratch, "pr-log")
+    suffix = uuid.uuid4().hex[:8]
+    shared = os.path.join(scratch, "pr-shared-" + suffix)
+    user = os.path.join(scratch, "pr-user-" + suffix)
+    log = os.path.join(scratch, "pr-log-" + suffix)
     write_schema(shared, user, socket)
     start_collector(backend, root, socket)
     identities = {}
@@ -2004,9 +2006,10 @@ def contract(args):
         fixture_root = fresh_collector_root(args.scratch, "fx")
         private_dir(fixture_root)
         fixture_socket = os.path.join(fixture_root, "s")
-        fixture_shared = os.path.join(args.scratch, "fx-shared")
-        fixture_user = os.path.join(args.scratch, "fx-user")
-        fixture_log = os.path.join(args.scratch, "fx-log")
+        fixture_suffix = uuid.uuid4().hex[:8]
+        fixture_shared = os.path.join(args.scratch, "fx-shared-" + fixture_suffix)
+        fixture_user = os.path.join(args.scratch, "fx-user-" + fixture_suffix)
+        fixture_log = os.path.join(args.scratch, "fx-log-" + fixture_suffix)
         write_schema(fixture_shared, fixture_user, fixture_socket)
         start_collector(args.backend, fixture_root, fixture_socket)
         try:
