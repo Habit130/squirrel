@@ -161,7 +161,7 @@ commands it actually issued. Stop only the collector that check started:
 ## Measured incremental cost
 
 Attempt 1 and attempt 2 timing results are not certification for this repair.
-A new MEAS-189-v1 manifest must be published before any attempt-3 sampling.
+A new MEAS-189-v1 manifest must be published before any certification sampling.
 Unavailable primary endpoints stay unavailable; handler return is a separate
 measurement. Backspace events must carry a character so production `handle`
 reaches `processKey`. Attempt 2 pre-run manifest SHA-256
@@ -170,6 +170,34 @@ The timing command exited 1. Every stratum had 2,000 pairs and zero
 unavailable primary endpoints. short, long, and backspace met the paired
 p95/p99 target. retype, number, space, mouse, and paging did not. That is
 not a Pass. It is not pixels, host persistence, or ranking benefit.
+
+AC-189-v2 independent measurement at `68e8954786a073edf2e99d1815d503b447a5c9aa`
+is also not a Pass. Pre-run manifest SHA-256
+`dba52e7b7e6a3c6f50c1bb2f58ef05e197a38f8af19adf13c438e8abc1610c9a`.
+Raw `28de24b423a56656ddd898c49c38f799bc6516fa99a1f62c28a46e606a0bec13`.
+The short stratum stored 2,000/2,000 capture-on arms. Whole-return paired
+p95 was 2.741 ms and p99 was 3.939 ms, against the unchanged 1/3 ms targets.
+Primary deltas were 2.730/3.929 ms. Copy, admission, and metadata counters
+on those blocks were microseconds, so they did not explain the miss. The
+paired median was about 0.012 ms, and the negative tail was about as large
+as the positive tail: the miss was unpaired stalls inside the primary
+endpoint, not a steady capture-on cost. The collector then hit its default
+64 MiB archive capacity (`capacity_stop`, 545,931 reported refusals, 53,245
+durable observations). Only 276 long arms and no later arms were stored,
+2,276/16,000 total. Later numerical deltas are not healthy-stratum results.
+That run is preserved and was not rerun.
+
+The stalls were window-server round trips in `NSScreen.screens` / `.main` and
+`setFrame`, inside `SquirrelPanel.show()`, on both capture arms. Attempt 6
+caches the screen frame until the caret leaves it or the display
+configuration changes, and commits a changed frame for an already-visible
+panel on the next main-queue turn. The update call still publishes candidate
+text and layout before it returns. This is not a claim that capture is free,
+and helper counters are not certification. A full healthy run uses the
+accepted collector's existing `--archive-capacity-bytes` override, recorded
+in that run's pre-sample manifest. The default 64 MiB limit is unchanged for
+other collectors. Thresholds, strata, counts, order, and endpoints are
+unchanged.
 
 Attempt 3 has not produced a certified timing run. Its sampling gate requires
 a naturally Secure-Input-off, confirmed quiet window, and the secure-input flag

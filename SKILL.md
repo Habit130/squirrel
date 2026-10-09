@@ -180,14 +180,15 @@ The app delegate creates one shared `SquirrelPanel` during `applicationWillFinis
 
 `SquirrelPanel.show()`:
 
-- chooses screen based on cursor position;
+- chooses screen based on cursor position, reusing the last screen frame until the caret leaves it or `NSApplication.didChangeScreenParametersNotification` fires;
 - sets effective appearance;
 - measures text with TextKit 2;
 - constrains oversized panels to most of the screen and scales via content-view bounds;
 - positions normal panels near the cursor, with special handling for vertical text;
 - applies content-view rotation for vertical mode;
 - configures translucency background (`NSGlassEffectView` on macOS 26+, `NSVisualEffectView` otherwise);
-- orders the nonactivating panel front.
+- orders the nonactivating panel front on first appearance.
+- A visible panel does not call `setFrame` synchronously. A changed frame is committed on the next main-queue turn, after this update has published candidate text. That window-server round trip is not part of the update-call endpoint and is not a pixel measurement. An unchanged frame is left in place.
 
 Mouse and scroll events on the panel are forwarded back to the input controller:
 

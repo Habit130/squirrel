@@ -2226,6 +2226,15 @@ def runtime_facts():
     return facts
 
 
+def positive_capacity(limits):
+    if not isinstance(limits, dict):
+        raise RuntimeError("timing collector limits are missing")
+    capacity = limits.get("archive_capacity_bytes")
+    if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity <= 0:
+        raise RuntimeError("timing archive capacity is not a supported positive byte limit")
+    return capacity
+
+
 def verify_timing_plan(plan, args):
     artifact = plan["artifact"]
     fixture = plan["fixture"]
@@ -2236,6 +2245,10 @@ def verify_timing_plan(plan, args):
         raise RuntimeError("measurement manifest digest mismatch")
     if plan.get("published_manifest_sha256") != plan["manifest_sha256"]:
         raise RuntimeError("published manifest digest does not match")
+    capacity = positive_capacity(plan.get("collector_limits"))
+    manifest = json.load(open(manifest_path))
+    if positive_capacity((manifest.get("capture_and_queue") or {})) != capacity:
+        raise RuntimeError("manifest archive capacity does not match the timing plan")
     if not str(plan.get("published_issue_comment", "")).startswith("https://github.com/Habit130/squirrel/issues/189#issuecomment-"):
         raise RuntimeError("manifest publication reference is missing")
 
@@ -2396,7 +2409,11 @@ def run_certified_timing(args, plan):
         raise RuntimeError("timing harness report path already exists")
     collector_root = fixture["collector_root"]
     socket = fixture["socket"]
-    start_collector(args.backend, collector_root, socket)
+    archive_capacity_bytes = positive_capacity(plan.get("collector_limits"))
+    start_collector(
+        args.backend, collector_root, socket,
+        archive_capacity_bytes=archive_capacity_bytes,
+    )
     try:
         code, _, policy_err = run(
             ["/usr/bin/python3", "-m", "archive.cli", "--socket", socket,
@@ -2426,6 +2443,19 @@ def run_certified_timing(args, plan):
             if not isinstance(on.get("sequence_after"), int) or on["sequence_after"] <= on.get("sequence_before", on["sequence_after"]):
                 raise RuntimeError("capture-on positive control did not advance source sequence")
         cli(args.backend, socket, "checkpoint")
+        status_code, status_body, status_err = cli(args.backend, socket, "status")
+        collector_status = status_body.get("body") if isinstance(status_body, dict) else {}
+        if status_code != 0 or not isinstance(collector_status, dict):
+            raise RuntimeError("collector status query failed: %s" % status_err)
+        if collector_status.get("capacity_stop") is True:
+            raise RuntimeError(
+                "collector capacity stop during timing: capacity_bytes=%s durable_bytes=%s refused=%s"
+                % (
+                    collector_status.get("capacity_bytes"),
+                    collector_status.get("durable_bytes"),
+                    collector_status.get("capacity_refused_units"),
+                )
+            )
         query_code, persisted, query_err = query_payloads(args.backend, socket)
         if query_code != 0:
             raise RuntimeError("public archive query failed: %s" % query_err)
@@ -2447,6 +2477,9 @@ def run_certified_timing(args, plan):
             "source_digest_sha256": artifact["source_digest_sha256"],
             "measured_pairs": len(raw_rows),
             "capture_on_pairs_publicly_queryable": measured_on_pairs,
+            "archive_capacity_bytes": archive_capacity_bytes,
+            "collector_capacity_stop": collector_status.get("capacity_stop"),
+            "collector_durable_bytes": collector_status.get("durable_bytes"),
             "loadavg": load,
             "strata": summary,
             "content_included": False,
