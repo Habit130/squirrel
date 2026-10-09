@@ -199,6 +199,12 @@ in that run's pre-sample manifest. The default 64 MiB limit is unchanged for
 other collectors. Thresholds, strata, counts, order, and endpoints are
 unchanged.
 
+Attempt 6 has not started certification sampling. Secure Input stayed enabled
+while the machine was otherwise quiet, so the named timing command was not
+invoked. `samples_started=0`. The allocated timing root was not given a failed
+preflight file. That is an environment pause, not a threshold result, a noise
+waiver, or a Pass.
+
 Attempt 3 has not produced a certified timing run. Its sampling gate requires
 a naturally Secure-Input-off, confirmed quiet window, and the secure-input flag
 was observed on when the run was attempted. That is an environment blocker, not
