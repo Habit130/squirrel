@@ -14,6 +14,9 @@ final class SquirrelPanel: NSPanel {
 
   var position: NSRect
   private var screenRect: NSRect = .zero
+  private var cachedScreenFrame: NSRect = .zero
+  private var screenCacheValid = false
+  private var screenParametersObserver: NSObjectProtocol?
   private var maxHeight: CGFloat = 0
 
   private var statusMessage: String = ""
@@ -23,6 +26,8 @@ final class SquirrelPanel: NSPanel {
   private var selRange: NSRange = .empty
   private var caretPos: Int = 0
   private var candidates: [String] = .init()
+  // periphery:ignore - isolated harness counts real panel.update returns
+  private(set) var updateCompletionCount: UInt64 = 0
   private var comments: [String] = .init()
   private var labels: [String] = .init()
   private var index: Int = 0
@@ -49,6 +54,19 @@ final class SquirrelPanel: NSPanel {
     contentView.addSubview(view)
     contentView.addSubview(view.textView)
     self.contentView = contentView
+    screenParametersObserver = NotificationCenter.default.addObserver(
+      forName: NSApplication.didChangeScreenParametersNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.screenCacheValid = false
+    }
+  }
+
+  deinit {
+    if let screenParametersObserver {
+      NotificationCenter.default.removeObserver(screenParametersObserver)
+    }
   }
 
   var linear: Bool {
@@ -151,6 +169,7 @@ final class SquirrelPanel: NSPanel {
 
   // swiftlint:disable:next cyclomatic_complexity function_parameter_count
   func update(preedit: String, selRange: NSRange, caretPos: Int, candidates: [String], comments: [String], labels: [String], highlighted index: Int, page: Int, lastPage: Bool, update: Bool) {
+    defer { updateCompletionCount += 1 }
     if update {
       self.preedit = preedit
       self.selRange = selRange
@@ -322,13 +341,23 @@ private extension SquirrelPanel {
   }
 
   func currentScreen() {
-    if let screen = NSScreen.main {
-      screenRect = screen.frame
+    // NSScreen.screens/.main round-trips to the window server and occasionally
+    // stalls for several milliseconds. That stall landed inside the measured
+    // panel update and made paired capture deltas fail even though admission
+    // itself was microseconds. Refresh only when the caret leaves the cached
+    // screen or the display configuration changes.
+    if screenCacheValid, cachedScreenFrame.contains(position.origin) {
+      screenRect = cachedScreenFrame
+      return
     }
+    var resolved = NSScreen.main?.frame ?? screenRect
     for screen in NSScreen.screens where screen.frame.contains(position.origin) {
-      screenRect = screen.frame
+      resolved = screen.frame
       break
     }
+    cachedScreenFrame = resolved
+    screenRect = resolved
+    screenCacheValid = true
   }
 
   func maxTextWidth() -> CGFloat {
@@ -473,7 +502,21 @@ private extension SquirrelPanel {
       if panelRect.minY < screenRect.minY { panelRect.origin.y = screenRect.minY }
     }
 
-    self.setFrame(panelRect, display: true)
+    // setFrame synchronizes with the window server and occasionally stalls for
+    // several milliseconds. Keep the first appearance positioned before
+    // orderFront. Later keys commit a changed frame on the next main-queue
+    // turn so this update returns after publishing candidate text, not after
+    // pixels. An unchanged frame is left in place.
+    if !frame.equalTo(panelRect) {
+      if isVisible {
+        let rect = panelRect
+        DispatchQueue.main.async { [weak self] in
+          self?.setFrame(rect, display: true)
+        }
+      } else {
+        self.setFrame(panelRect, display: true)
+      }
+    }
 
     // Keep the window frame at the scaled physical size while drawing in natural coordinates through bounds.
     contentView!.frame = NSRect(origin: .zero, size: panelRect.size)
@@ -511,7 +554,9 @@ private extension SquirrelPanel {
 
     alphaValue = theme.alpha
     invalidateShadow()
-    orderFront(nil)
+    if !isVisible {
+      orderFront(nil)
+    }
     // voila!
   }
 

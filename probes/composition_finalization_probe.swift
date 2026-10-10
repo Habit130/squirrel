@@ -47,7 +47,7 @@ enum CompositionFinalizationProbe {
       expect(!plan.composition.createdSession, "\(operation.rawValue) must not create a session")
     }
 
-    // SCN-118-5 / AC118-3: nil client clears local state only.
+    // SCN-118-5 / AC118-3: nil client records an unavailable outcome and clears locally.
     let nilClient = CompositionFinalizationState(
       hasActiveController: true,
       hasSession: true,
@@ -56,15 +56,15 @@ enum CompositionFinalizationProbe {
       rimeAvailable: true
     )
     let expectedClear = CompositionFinalizationPlan(
-      clientAction: .clearLocalState,
+      clientAction: .unavailableClient,
       hidePanel: true,
       sessionDisposition: .destroyViaRime,
       createdSession: false
     )
-    expect(CompositionFinalization.plan(for: nilClient) == expectedClear, "nil client must clear locally, not insert")
+    expect(CompositionFinalization.plan(for: nilClient) == expectedClear, "nil client must report unavailable and clear locally, not insert")
     for operation in GlobalLifecycleOperation.allCases {
       let plan = CompositionFinalization.plan(operation: operation, state: nilClient)
-      expect(plan.composition.clientAction == .clearLocalState, "\(operation.rawValue)+nil client must not commit")
+      expect(plan.composition.clientAction == .unavailableClient, "\(operation.rawValue)+nil client must report unavailable, not commit")
     }
 
     let afterFinalize = CompositionFinalizationState(
@@ -179,7 +179,8 @@ enum CompositionFinalizationProbe {
     for operation in GlobalLifecycleOperation.allCases {
       let host = runScenario(name: "SCN-118-5-\(operation.rawValue)", start: nilClient, operations: [operation])
       expect(host.inserted.isEmpty, "SCN-118-5 \(operation.rawValue) must not insert, got \(host.inserted)")
-      expect(host.events.contains("clearLocal"), "SCN-118-5 \(operation.rawValue) must clear local state")
+      expect(host.events.contains("unavailableClient"), "SCN-118-5 \(operation.rawValue) must record unavailable client")
+      expect(host.state.pendingInput == nil, "SCN-118-5 \(operation.rawValue) must clear local pending state")
       expect(host.events.contains("hidePanel"), "SCN-118-5 \(operation.rawValue) must hide panel")
     }
 
@@ -220,9 +221,12 @@ enum CompositionFinalizationProbe {
               )
               let composition = CompositionFinalization.plan(for: state)
               expect(!composition.createdSession, "matrix must never create a session: \(state)")
-              if case .commitOnce(let text) = composition.clientAction {
-                expect(hasClient && hasSession && rimeAvailable && text == "词" && pending == "词", "unexpected commit \(text) for \(state)")
-              }
+               if case .commitOnce(let text) = composition.clientAction {
+                 expect(hasClient && hasSession && rimeAvailable && text == "词" && pending == "词", "unexpected commit \(text) for \(state)")
+               }
+               if case .unavailableClient = composition.clientAction {
+                 expect(!hasClient && hasSession && rimeAvailable && pending == "词", "unexpected unavailable client action for \(state)")
+               }
               if !rimeAvailable {
                 expect(composition.sessionDisposition != .destroyViaRime, "no destroyViaRime after finalize: \(state)")
               }
@@ -304,6 +308,9 @@ private final class RecordingHost: CompositionFinalizationHost {
     case .commitOnce(let text):
       events.append("insert:\(text)")
       inserted.append(text)
+      state.pendingInput = nil
+    case .unavailableClient:
+      events.append("unavailableClient")
       state.pendingInput = nil
     case .clearLocalState:
       events.append("clearLocal")
