@@ -199,11 +199,28 @@ in that run's pre-sample manifest. The default 64 MiB limit is unchanged for
 other collectors. Thresholds, strata, counts, order, and endpoints are
 unchanged.
 
-Attempt 6 has not started certification sampling. Secure Input stayed enabled
-while the machine was otherwise quiet, so the named timing command was not
-invoked. `samples_started=0`. The allocated timing root was not given a failed
-preflight file. That is an environment pause, not a threshold result, a noise
-waiver, or a Pass.
+Attempt 6 first paused with Secure Input enabled and `samples_started=0`.
+That pause was not a result. After Secure Input was observed off, one
+MEAS-189-v1 run started. Pre-sample manifest SHA-256
+`e673c84005558ba28d94884b36d442fd474c95a7d565b01732704b9622a7146e`,
+published at https://github.com/Habit130/squirrel/issues/189#issuecomment-6091817666.
+Harness SHA-256 `97ab2ab4b2a6ce92d01af4839c43a42909be5365ad32ade6a3956edec7a3edc9`.
+Raw `74f2e78bb5bb2dba9c984adaf882038e2ab9b40a6f6a01568cf17cb510e6c8bc`,
+16,000 pairs, 0 unavailable primary endpoints, negatives retained.
+The checker process was interrupted after the harness wrote that raw and
+before it wrote the timing report. The same raw was not rerun. Public timeline
+query of the still-running collector proved 16,000/16,000 capture-on arms.
+Collector capacity stop was false: 327,602 durable observations, 381,947,074
+bytes, configured capacity 2,147,483,648. That is not the 64 MiB default.
+
+Seven strata met the paired 1/3 ms target, including short at whole-return
+p95 0.049 ms and p99 0.103 ms. Space did not: whole-return paired p95
+3.568 ms and p99 6.489 ms; primary p95 3.574 ms and p99 6.495 ms. The space
+median delta was -0.054 ms, and the negative tail was at least as large as
+the positive tail. Both arms were about 45 ms at p50. Admission on that
+stratum stayed microseconds. This is unpaired commit-path variance, not a
+steady capture-on cost and not an environment blocker. It is not a Pass.
+It is not pixels, host persistence, or ranking benefit.
 
 Attempt 3 has not produced a certified timing run. Its sampling gate requires
 a naturally Secure-Input-off, confirmed quiet window, and the secure-input flag
