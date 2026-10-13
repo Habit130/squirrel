@@ -22,6 +22,7 @@ final class SquirrelPanel: NSPanel {
   private var statusMessage: String = ""
   private var statusTimer: Timer?
   fileprivate var pendingHide: DispatchWorkItem?
+  fileprivate var showEpoch: UInt64 = 0
 
   private var preedit: String = ""
   private var selRange: NSRange = .empty
@@ -384,6 +385,7 @@ private extension SquirrelPanel {
 
   // swiftlint:disable:next cyclomatic_complexity
   func show() {
+    showEpoch &+= 1
     pendingHide?.cancel()
     pendingHide = nil
     contentView?.isHidden = false
@@ -604,11 +606,14 @@ private extension SquirrelPanel {
   }
 }
 
-// orderOut waits for the window server. Content and hit targets are already cleared.
+// orderOut waits for the window server. A show() after scheduling changes the
+// epoch, so a cancelled or stale removal cannot hide the next composition.
 private func schedulePanelRemoval(_ panel: SquirrelPanel) {
+  let epoch = panel.showEpoch
   let removal = DispatchWorkItem { [weak panel] in
-    panel?.pendingHide = nil
-    panel?.orderOut(nil)
+    guard let panel, panel.showEpoch == epoch else { return }
+    panel.pendingHide = nil
+    panel.orderOut(nil)
   }
   panel.pendingHide = removal
   DispatchQueue.main.async(execute: removal)
