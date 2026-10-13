@@ -111,6 +111,9 @@ def self_test():
         failures.append("public_query_inclusive_upper_bound")
     if public_capture_identity([observation], {**identity, "sequence_after": 4}):
         failures.append("public_query_empty_interval")
+    controls = [identity, {**identity, "process_id": "other"}, {**identity, "sequence_after": 4}]
+    if count_public_capture_identities([observation, observation], controls) != 1:
+        failures.append("indexed_public_query_identity")
     excluded_identity = {
         "source_instance_id": "source-1",
         "excluded_process_id": "process-1",
@@ -610,7 +613,7 @@ def run_probes(probes_dir):
     return results
 
 
-def query_payloads(backend, socket):
+def query_timeline(backend, socket):
     rows = []
     cursor = ""
     while True:
@@ -629,6 +632,13 @@ def query_payloads(backend, socket):
         if next_cursor == cursor:
             return 1, rows, "timeline cursor did not advance"
         cursor = next_cursor
+    return 0, rows, ""
+
+
+def query_payloads(backend, socket):
+    code, rows, err = query_timeline(backend, socket)
+    if code != 0:
+        return code, rows, err
     processes = sorted({row.get("process_id") for row in rows if row.get("process_id")})
     detailed = []
     for process_id in processes:
@@ -1170,6 +1180,40 @@ def uninserted_commit_relation(rows, identity):
         "same_uninserted_process": True,
         "segment_argument": segment,
     }
+
+
+def empty_boundary_relation(rows, identities):
+    evidence = {}
+    idle = identities.get("idle") or {}
+    evidence["idle_escape_admits_nothing"] = (
+        bool(idle.get("source_instance_id"))
+        and bool(idle.get("sequence_before"))
+        and idle.get("sequence_before") == idle.get("sequence_after")
+    )
+    for name in ("backspace", "ineligible_escape"):
+        identity = identities.get(name) or {}
+        source = identity.get("source_instance_id")
+        old = identity.get("old_process_id")
+        new = identity.get("next_process_id")
+        cut = int(identity.get("cut_sequence") or -1)
+        old_rows = [row for row in rows if row.get("source_instance_id") == source and row.get("process_id") == old]
+        next_rows = [row for row in rows if row.get("source_instance_id") == source and row.get("process_id") == new]
+        evidence[name + "_distinct_process"] = bool(source and old and new and old != new and old_rows and next_rows)
+        evidence[name + "_closed_chain"] = (
+            cut >= 0 and not any(row.get("source_local_sequence", -1) > cut for row in old_rows)
+            and any(row.get("observation_kind") == "start" and row.get("source_local_sequence", -1) > cut for row in next_rows)
+            and not any(row.get("parent_update_id") == identity.get("old_update_id") for row in next_rows)
+        )
+        if name == "backspace":
+            evidence["delete_to_empty_observed"] = any(
+                row.get("observation_kind") == "replacement" and isinstance(row.get("payload"), dict)
+                and payload_preedit(row) == "" for row in old_rows
+            )
+        else:
+            evidence["ineligible_boundary_content_free"] = any(
+                row.get("observation_kind") == "exclusion_notice" and row.get("payload") is None for row in old_rows
+            )
+    return {"passed": all(evidence.values()), "evidence": evidence}
 
 
 def equal_text_relation(rows, identity):
@@ -2002,6 +2046,7 @@ def contract(args):
         schema_relation = schema_excluded_unavailable_relation(rows, gate_ids)
         uninserted_relation = uninserted_commit_relation(rows, gate_ids)
         equal_relation = equal_text_relation(rows, gate_ids)
+        boundary_relation = empty_boundary_relation(rows, gates_body.get("empty_boundary_identities") or {})
         transition_relation = mid_composition_relation(rows, edge_body.get("transition_identities") or {})
         fixture_root = fresh_collector_root(args.scratch, "fx")
         private_dir(fixture_root)
@@ -2039,6 +2084,7 @@ def contract(args):
         evidence["unavailable_schema_exclusion"] = schema_relation.get("passed") is True
         evidence["uninserted_commit_not_archived"] = uninserted_relation.get("passed") is True
         evidence["equal_text_distinct_processes"] = equal_relation.get("passed") is True
+        evidence["empty_boundary_processes"] = gates_code == 0 and boundary_relation.get("passed") is True
         evidence["association_stored_relations"] = association.get("passed") is True
         evidence["no_unobserved_prefix_admitted"] = (
             edge_code == 0 and edge_body.get("failure_count", 1) == 0 and transition_relation.get("passed") is True
@@ -2106,6 +2152,7 @@ def contract(args):
                 "schema_excluded_unavailable": schema_relation,
                 "uninserted_commit": uninserted_relation,
                 "equal_text": equal_relation,
+                "empty_boundaries": boundary_relation,
                 "association": association,
                 "mid_composition": transition_relation,
                 "pause_restart": pause_relation,
@@ -2321,6 +2368,33 @@ def public_capture_identity(rows, identity):
     )
 
 
+def count_public_capture_identities(rows, identities):
+    # Timing needs only the public source/process/sequence relation. Index once,
+    # instead of scanning the full archive for every measured arm.
+    index = {}
+    for row in rows:
+        index.setdefault((row.get("source_instance_id"), row.get("process_id")), []).append(row)
+    return sum(public_capture_identity(
+        index.get((identity.get("source_instance_id"), identity.get("process_id")), []), identity
+    ) for identity in identities)
+
+
+def timing_distributions(rows):
+    result = {}
+    for key in ("off_ns", "on_ns", "delta_ns", "off_primary_ns", "on_primary_ns", "primary_delta_ns",
+                "copy_ns", "admission_ns", "metadata_ns"):
+        values = [row[key] for row in rows]
+        result[key] = {
+            "count": len(values),
+            "p50": nearest_rank(values, .50) if values else None,
+            "p95": nearest_rank(values, .95) if values else None,
+            "p99": nearest_rank(values, .99) if values else None,
+            "max": max(values) if values else None,
+            "negative_count": sum(value < 0 for value in values),
+        }
+    return result
+
+
 def summarize_timing_rows(rows):
     summary = {}
     failed = False
@@ -2340,6 +2414,7 @@ def summarize_timing_rows(rows):
                 "p99": nearest_rank(values, 0.99) if values else None,
                 "max": max(values) if values else None,
                 "negative_count": sum(value < 0 for value in values),
+                "distributions_ns": timing_distributions(block_rows),
             }
             if len(values) != 200:
                 failed = True
@@ -2355,6 +2430,7 @@ def summarize_timing_rows(rows):
             "negative_count": sum(value < 0 for value in deltas),
             "primary_unavailable": sum(not row.get("primary_available") for row in group),
             "by_block": by_block,
+            "distributions_ns": timing_distributions(group),
         }
         summary[stratum] = item
         keyboard = stratum in {"short", "long", "backspace", "retype", "number", "space"}
@@ -2456,12 +2532,11 @@ def run_certified_timing(args, plan):
                     collector_status.get("capacity_refused_units"),
                 )
             )
-        query_code, persisted, query_err = query_payloads(args.backend, socket)
+        query_code, persisted, query_err = query_timeline(args.backend, socket)
         if query_code != 0:
             raise RuntimeError("public archive query failed: %s" % query_err)
-        measured_on_pairs = sum(
-            public_capture_identity(persisted, row.get("on_capture_identity") or {})
-            for row in raw_rows
+        measured_on_pairs = count_public_capture_identities(
+            persisted, [row.get("on_capture_identity") or {} for row in raw_rows]
         )
         if measured_on_pairs != 8 * 2000:
             raise RuntimeError("public query did not prove every capture-on measured arm")
@@ -2472,6 +2547,8 @@ def run_certified_timing(args, plan):
             "passed": not failed,
             "manifest_sha256": plan["manifest_sha256"],
             "harness_sha256": artifact["harness_sha256"],
+            "raw_path": os.path.abspath(raw),
+            "raw_sha256": sha256(raw),
             "backend_tree": backend_identity["tree"],
             "librime_dylib_sha256": artifact["librime_dylib_sha256"],
             "source_digest_sha256": artifact["source_digest_sha256"],

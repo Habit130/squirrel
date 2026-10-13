@@ -158,28 +158,24 @@ final class InputArchiveEngine {
     let previousLength = lastInputLength
     lastPreedit = owned.preedit
     lastInputLength = owned.inputLength
-    // An empty observation is the empty/terminal boundary of any composition. A
-    // composition whose earlier prefix was never observed stops excluding here,
-    // and this boundary is reached before any early return below.
-    if !hasContent {
-      compositionUnobserved = false
-      lastRecordedPreedit = ""
-    }
     lock.unlock()
-    if !hasContent && operation != "escape" && !processOpen {
+    // Idle empty input is not a cancellation and must not open a process.
+    if !hasContent && !processOpen {
+      noteEmptyInputBoundary()
       return
     }
     if !mayAdmit(schema: owned.schemaId, clientPresent: owned.clientPresent) {
       // Opt-out, pause, ineligibility or an excluded/unsupported schema. The
-      // content of this observation was not recorded, so the composition may
-      // carry a prefix that was never observed. It stays excluded unless the
-      // next eligible observation continues the recorded prefix exactly, which
-      // proves nothing was hidden (E2/E3 no-backfill).
+      // content of this observation was not recorded, so the composition stays
+      // excluded until its empty/terminal boundary (E2/E3 no-backfill).
       if hasContent {
         markCompositionUnobserved()
       }
       if shouldExclude(schema: owned.schemaId) {
         admitExclusion()
+      }
+      if !hasContent {
+        noteEmptyInputBoundary()
       }
       return
     }
@@ -192,6 +188,9 @@ final class InputArchiveEngine {
     // input was active, so it must not resume capture from a full snapshot.
     if unobserved {
       admitExclusion()
+      if !hasContent {
+        noteEmptyInputBoundary()
+      }
       return
     }
     if !processOpen && hasContent {
@@ -208,6 +207,9 @@ final class InputArchiveEngine {
       return
     }
     admitPage(kind: kind, outcome: outcome(for: kind), page: owned, operation: operation)
+    if !hasContent {
+      noteEmptyInputBoundary()
+    }
   }
 
   // periphery:ignore

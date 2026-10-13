@@ -90,6 +90,7 @@ enum InputArchiveFrontendHarness {
   static var policyIdentities: [String: String] = [:]
   static var queueSaturationStatus: [String: String] = [:]
   static var timingPreflightStatus: [String: Any] = [:]
+  static var emptyBoundaryIdentities: [String: [String: String]] = [:]
 
   static func main() {
     let arguments = parse(CommandLine.arguments)
@@ -131,6 +132,11 @@ enum InputArchiveFrontendHarness {
       emit(arguments["report"])
       exit(failures.isEmpty ? 0 : 1)
     }
+    if scenario == "path-controls" {
+      runAncestorAliasControl(pathRoot: arguments["path-root"] ?? "")
+      emit(arguments["report"])
+      exit(failures.isEmpty ? 0 : 1)
+    }
     if !bootstrap() {
       emit(arguments["report"])
       return
@@ -141,6 +147,10 @@ enum InputArchiveFrontendHarness {
       runGlobalFinalization()
     case "timing":
       runTiming()
+    case "timing-diagnostic":
+      runTiming(strata: [arguments["stratum"] ?? "space"], pairs: 80, warmup: 10)
+    case "empty-boundaries":
+      runEmptyBoundaries()
     case "absent":
       runAbsent()
     case "metadata":
@@ -438,7 +448,10 @@ enum InputArchiveFrontendHarness {
     ]
   }
 
-  static func runTiming() {
+  static func runTiming(
+    strata: [String] = ["short", "long", "backspace", "retype", "number", "space", "mouse", "paging"],
+    pairs: Int = 2000, warmup: Int = 100
+  ) {
     expect(waitForPolicy("enabled"), "timing policy not fresh")
     // The engine reports the operation's schema; the eligible fixture schema has
     // to be selected before any measured stratum, otherwise every observation
@@ -446,16 +459,16 @@ enum InputArchiveFrontendHarness {
     selectLuna()
     clearComposition()
     expect(InputArchiveEngine.shared.contentFreeStatus()["queued"] != nil, "engine status unavailable")
-    let strata = ["short", "long", "backspace", "retype", "number", "space", "mouse", "paging"]
     var rows: [[String: Any]] = []
     for stratum in strata {
-      for _ in 0..<100 {
+      for _ in 0..<warmup {
         measurePair(stratum, record: false, into: &rows)
       }
-      for pair in 0..<2000 {
+      for pair in 0..<pairs {
         measurePair(stratum, record: true, pair: pair, into: &rows)
       }
     }
+    expect(InputArchiveEngine.shared.waitUntilDrained(timeout: 5), "timing observations did not drain")
     if let raw = parse(CommandLine.arguments)["raw"] {
       let data = try? JSONSerialization.data(withJSONObject: ["rows": rows, "content_included": false])
       try? data?.write(to: URL(fileURLWithPath: raw))
@@ -475,6 +488,7 @@ enum InputArchiveFrontendHarness {
       clearComposition()
       selectLuna()
       prepare(stratum)
+      drainMainQueue()
       InputArchiveEngine.shared.setMeasurementSuppressed(arm == "off")
       let beforePanel = NSApp.squirrelAppDelegate.panel?.updateCompletionCount ?? 0
       let beforeStatus = InputArchiveEngine.shared.contentFreeStatus()
@@ -507,6 +521,7 @@ enum InputArchiveFrontendHarness {
         _ = panelMoved
         _ = timing
       }
+      drainMainQueue()
     }
     if record, let off = samples["off"], let on = samples["on"] {
       rows.append([
@@ -531,6 +546,18 @@ enum InputArchiveFrontendHarness {
         "content_included": false
       ])
     }
+  }
+
+  static func drainMainQueue() {
+    // A real application runs its main queue between input events. Drain queued
+    // panel work symmetrically, outside the measured handler/action interval.
+    var drained = false
+    DispatchQueue.main.async { drained = true }
+    let deadline = Date(timeIntervalSinceNow: 1)
+    while !drained && Date() < deadline {
+      _ = RunLoop.current.run(mode: .default, before: deadline)
+    }
+    expect(drained, "main queue did not reach the next event boundary")
   }
 
   static func prepare(_ stratum: String) {
@@ -894,6 +921,88 @@ enum InputArchiveFrontendHarness {
       "equal_second_process_id": equalSecondProcess,
       "sequence_after": InputArchiveEngine.shared.contentFreeStatus()["source_local_sequence"] ?? "0"
     ]
+    runEmptyBoundaries()
+    runPanelHideLifecycle()
+  }
+
+  static func runPanelHideLifecycle() {
+    guard let controller, let panel = NSApp.squirrelAppDelegate.panel else {
+      fail("panel lifecycle control unavailable")
+      return
+    }
+    selectLuna()
+    clearComposition()
+    type("ni")
+    expect(panel.isVisible, "panel lifecycle positive control did not show")
+    sendKey(49, " ")
+    expect(!panel.isVisible || (panel.contentView?.isHidden == true && panel.ignoresMouseEvents),
+           "committed panel still exposes stale content or hit targets")
+    type("ni")
+    drainMainQueue()
+    expect(panel.isVisible && panel.contentView?.isHidden == false && !panel.ignoresMouseEvents,
+           "a stale hide removed the next composition panel")
+    sendKey(49, " ")
+    drainMainQueue()
+    expect(!panel.isVisible, "commit left its panel visible after the next main-queue turn")
+    type("ni")
+    controller.deactivateServer(client)
+    expect(!panel.isVisible, "deactivation did not synchronously hide the panel")
+    drainMainQueue()
+    expect(!panel.isVisible, "deactivation left queued panel work visible")
+    controller.activateServer(client)
+  }
+
+  static func runEmptyBoundaries() {
+    expect(waitForPolicy("enabled"), "empty-boundary policy not effective")
+    let previousSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSignal }
+    let engine = InputArchiveEngine.shared
+    selectLuna()
+    clearComposition()
+    engine.noteContinuityCut("deactivation")
+    client.reset()
+    let idleSequence = engine.contentFreeStatus()["source_local_sequence"] ?? ""
+    sendKey(53, "\u{1b}")
+    expect(!engine.processOpen, "idle Escape opened a phantom process")
+    expect(engine.contentFreeStatus()["source_local_sequence"] == idleSequence,
+           "idle Escape admitted an observation")
+    emptyBoundaryIdentities["idle"] = [
+      "source_instance_id": engine.sourceInstanceId, "process_id": engine.processId,
+      "sequence_before": idleSequence,
+      "sequence_after": engine.contentFreeStatus()["source_local_sequence"] ?? ""
+    ]
+
+    for boundary in ["backspace", "ineligible_escape"] {
+      clearComposition()
+      engine.noteContinuityCut("deactivation")
+      type("n")
+      expect(engine.processOpen, "empty-boundary control did not open a process")
+      let oldProcess = engine.processId
+      let oldUpdate = engine.updateId
+      if boundary == "backspace" {
+        sendBackspace()
+      } else {
+        InputArchiveSignals.secureEventInputEnabled = { true }
+        sendKey(53, "\u{1b}")
+        InputArchiveSignals.secureEventInputEnabled = { false }
+      }
+      expect(controller?.compositionFinalizationState(rimeAvailable: true).pendingInput?.isEmpty != false,
+             "boundary did not empty actual librime composition")
+      expect(!engine.processOpen, "\(boundary) left the old process open")
+      let cutSequence = engine.contentFreeStatus()["source_local_sequence"] ?? ""
+      type("n")
+      expect(engine.processId != oldProcess, "\(boundary) reused the old process")
+      expect(engine.updateId != oldUpdate, "\(boundary) reused the old update")
+      emptyBoundaryIdentities[boundary] = [
+        "source_instance_id": engine.sourceInstanceId, "old_process_id": oldProcess,
+        "old_update_id": oldUpdate, "cut_sequence": cutSequence,
+        "next_process_id": engine.processId, "next_update_id": engine.updateId
+      ]
+    }
+    expect(client.inserts.isEmpty, "empty-boundary controls inserted text")
+    clearComposition()
+    expect(engine.waitUntilDrained(timeout: 3), "empty-boundary records did not drain")
   }
 
   static func runPauseBaseline() {
@@ -1185,6 +1294,15 @@ enum InputArchiveFrontendHarness {
       let aliasedSocket = alias.appendingPathComponent("y/s").path
       expect(InputArchivePaths.refusal(for: validSocket) == nil, "ordinary nested socket path was refused")
       expect(InputArchivePaths.refusal(for: aliasedSocket) == "unsafe_root", "nested ancestor symlink was accepted")
+      for component in ["CloudStorage", "cloudstorage", "CLOUDSTORAGE", "Mobile Documents", "mobile documents"] {
+        let synchronized = root.appendingPathComponent(component, isDirectory: true)
+        try FileManager.default.createDirectory(
+          at: synchronized, withIntermediateDirectories: true,
+          attributes: [.posixPermissions: 0o700]
+        )
+        expect(InputArchivePaths.refusal(for: synchronized.appendingPathComponent("s").path) == "unsafe_root",
+               "synchronized path case variant was accepted")
+      }
     } catch {
       fail("could not create private ancestor-alias controls")
     }
@@ -1295,7 +1413,8 @@ enum InputArchiveFrontendHarness {
       "transition_identities": transitionIdentities,
       "policy_identities": policyIdentities,
       "queue_saturation": queueSaturationStatus,
-      "timing_preflight": timingPreflightStatus
+      "timing_preflight": timingPreflightStatus,
+      "empty_boundary_identities": emptyBoundaryIdentities
     ]
     guard let path, let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted]) else {
       return

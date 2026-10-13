@@ -14,9 +14,12 @@ Both of these are required before any input text is admitted:
 1. `input_archive/socket` in the Squirrel config, an absolute non-aliased local
    socket path that is not a known synchronized destination and that fits
    macOS `sun_path` (103 bytes). Absence, empty, symlink, alias, cloud path,
-   or overlong path stays off. Every existing path component is checked, so a
-   symlink or Finder alias in an ancestor is refused as well as one at the
-   socket itself. Overlong paths are refused; the frontend does not `chdir`.
+   or overlong path stays off. Synchronized component names are compared
+   case-insensitively, so a differently cased `CloudStorage` or
+   `Mobile Documents` component is the same refusal. Every existing path
+   component is checked, so a symlink or Finder alias in an ancestor is
+   refused as well as one at the socket itself. Overlong paths are refused;
+   the frontend does not `chdir`.
 2. A locally fresh observation that the collector's desired policy is
    `enabled`. Initial, unknown, stale, `off`, and `paused` observations do not
    admit text and are not a global-effectiveness acknowledgement.
@@ -60,8 +63,14 @@ and the continuity cut for deactivation is applied after that observation. If
 pending text exists but the client is unavailable, a content-free unavailable
 terminal is recorded; no text is inserted. Empty pending input is not that
 case: idle deactivation does not open a process and does not persist
-`unavailable_client`. An unavailable terminal uses the same capture, secure,
-and schema gates as other terminals. A non-Luna or unknown schema is a
+`unavailable_client`. Idle Escape is the same boundary: it does not
+synthesize a cancellation process. An empty observation that closes an
+already-open composition, including Backspace of the last character and an
+ineligible Escape or schema switch, records only the gated outcome and then
+closes that process. The next composition gets a new process and update
+chain. A previously unobserved composition stays excluded through that empty
+boundary; the boundary does not admit its hidden prefix. An unavailable
+terminal uses the same capture, secure, and schema gates as other terminals. A non-Luna or unknown schema is a
 content-free exclusion with schema `unknown`, never a Luna label. Commit text
 is recorded only after `insertText` returns. If that call does not happen, the
 archive records a content-free unavailable terminal when the gates pass, and
@@ -221,6 +230,15 @@ the positive tail. Both arms were about 45 ms at p50. Admission on that
 stratum stayed microseconds. This is unpaired commit-path variance, not a
 steady capture-on cost and not an environment blocker. It is not a Pass.
 It is not pixels, host persistence, or ranking benefit.
+
+The space stalls were `orderOut` synchronizing with the window server while
+the panel was still visible, on both capture arms. Attempt 7 clears candidate
+content and hit targets before the handler returns, and removes an
+already-visible panel on the next main-queue turn. Deactivation, raw
+finalization, and global cleanup still hide immediately. An 80-pair diagnostic
+is not MEAS-189-v1 certification. A new pre-sample manifest and exact-head run
+are required before any Pass claim. The timing checker proves capture-on arms
+from the public timeline; it does not scan private detail for every process.
 
 Attempt 3 has not produced a certified timing run. Its sampling gate requires
 a naturally Secure-Input-off, confirmed quiet window, and the secure-input flag

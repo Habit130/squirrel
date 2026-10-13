@@ -40,6 +40,10 @@ enum InputArchive {
     "CloudStorage", "Dropbox", "OneDrive", "Mobile Documents", "iCloud",
     "Google Drive", "com~apple~CloudDocs", "Box Sync", "SynologyDrive"
   ]
+
+  static func isSynchronizedComponent(_ part: String) -> Bool {
+    synchronizedPathParts.contains { part.caseInsensitiveCompare($0) == .orderedSame }
+  }
 }
 
 enum InputArchiveSignals {
@@ -123,7 +127,7 @@ enum InputArchivePaths {
     if parts.contains("..") {
       return "invalid_request"
     }
-    if parts.contains(where: InputArchive.synchronizedPathParts.contains) {
+    if parts.contains(where: InputArchive.isSynchronizedComponent) {
       return "unsafe_root"
     }
 

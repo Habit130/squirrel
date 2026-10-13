@@ -150,7 +150,7 @@ The text path is:
 
 `NSEvent` -> `SquirrelInputController.handle` -> `processKey` -> `rimeAPI.process_key` -> `rimeUpdate` -> `get_commit`/`get_status`/`get_context` -> `client.insertText` and/or `client.setMarkedText` plus `SquirrelPanel.update`.
 
-Optional input-archive observation copies those already-materialized strings after the engine call and admits them on a background socket. It does not add a candidate request, a second panel refresh, or a commit. Capture stays off unless `input_archive/socket` is set and the collector policy is locally observed as enabled. An empty composition is not recorded as an unavailable client. Commit text is archived only after `insertText` returns; a commit that does not insert is not claimed as an insertion. See `docs/input-archive-frontend.md`.
+Optional input-archive observation copies those already-materialized strings after the engine call and admits them on a background socket. It does not add a candidate request, a second panel refresh, or a commit. Capture stays off unless `input_archive/socket` is set and the collector policy is locally observed as enabled. An empty composition is not recorded as an unavailable client. Idle Escape does not open a process, and an empty observation closes an already-open process instead of letting the next composition reuse it. Synchronized socket-path components are matched case-insensitively. Commit text is archived only after `insertText` returns; a commit that does not insert is not claimed as an insertion. See `docs/input-archive-frontend.md`.
 
 ## Marked Text and Commit Rules
 
@@ -189,6 +189,7 @@ The app delegate creates one shared `SquirrelPanel` during `applicationWillFinis
 - configures translucency background (`NSGlassEffectView` on macOS 26+, `NSVisualEffectView` otherwise);
 - orders the nonactivating panel front on first appearance.
 - A visible panel does not call `setFrame` synchronously. A changed frame is committed on the next main-queue turn, after this update has published candidate text. That window-server round trip is not part of the update-call endpoint and is not a pixel measurement. An unchanged frame is left in place.
+- Commit and a key update with no remaining context clear candidate content and mouse hit targets before return. `orderOut` of an already-visible panel waits for the next main-queue turn. Deactivation and global cleanup still hide immediately. That removal is not part of the update-call endpoint and is not a pixel measurement.
 
 Mouse and scroll events on the panel are forwarded back to the input controller:
 

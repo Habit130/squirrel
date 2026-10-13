@@ -21,6 +21,7 @@ final class SquirrelPanel: NSPanel {
 
   private var statusMessage: String = ""
   private var statusTimer: Timer?
+  fileprivate var pendingHide: DispatchWorkItem?
 
   private var preedit: String = ""
   private var selRange: NSRange = .empty
@@ -160,11 +161,19 @@ final class SquirrelPanel: NSPanel {
     super.sendEvent(event)
   }
 
-  func hide() {
+  func hide(immediately: Bool = false) {
     statusTimer?.invalidate()
     statusTimer = nil
-    orderOut(nil)
     maxHeight = 0
+    contentView?.isHidden = true
+    ignoresMouseEvents = true
+    if immediately {
+      pendingHide?.cancel()
+      pendingHide = nil
+      if isVisible { orderOut(nil) }
+    } else if pendingHide == nil && isVisible {
+      schedulePanelRemoval(self)
+    }
   }
 
   // swiftlint:disable:next cyclomatic_complexity function_parameter_count
@@ -375,6 +384,10 @@ private extension SquirrelPanel {
 
   // swiftlint:disable:next cyclomatic_complexity
   func show() {
+    pendingHide?.cancel()
+    pendingHide = nil
+    contentView?.isHidden = false
+    ignoresMouseEvents = false
     currentScreen()
     let theme = view.currentTheme
     if theme.native || view.darkTheme.available {
@@ -589,4 +602,14 @@ private extension SquirrelPanel {
       return visualEffectView
     }
   }
+}
+
+// orderOut waits for the window server. Content and hit targets are already cleared.
+private func schedulePanelRemoval(_ panel: SquirrelPanel) {
+  let removal = DispatchWorkItem { [weak panel] in
+    panel?.pendingHide = nil
+    panel?.orderOut(nil)
+  }
+  panel.pendingHide = removal
+  DispatchQueue.main.async(execute: removal)
 }

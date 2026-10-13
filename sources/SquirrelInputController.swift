@@ -269,7 +269,11 @@ final class SquirrelInputController: IMKInputController {
   }
 
   override func hidePalettes() {
-    NSApp.squirrelAppDelegate.panel?.hide()
+    hidePalettes(immediately: true)
+  }
+
+  private func hidePalettes(immediately: Bool) {
+    NSApp.squirrelAppDelegate.panel?.hide(immediately: immediately)
     super.hidePalettes()
   }
 
@@ -616,7 +620,7 @@ private extension SquirrelInputController {
     if rimeAPI.get_commit(session, &commitText) {
       if let text = commitText.text {
         let owned = String(cString: text)
-        if commit(string: owned) {
+        if commit(string: owned, immediatelyHide: false) {
           pendingArchiveCommit = .inserted(owned)
         } else {
           // commit(_:) returned before insertText. Do not retain the text or
@@ -771,7 +775,9 @@ private extension SquirrelInputController {
         operation: ""
       ))
     } else {
-      hidePalettes()
+      // No context remains after this key. Clear the panel now, but do not wait
+      // for window-server removal; deactivation still hides immediately.
+      hidePalettes(immediately: false)
       InputArchiveEngine.shared.observe(InputArchiveSnapshot(
         schemaId: schemaId,
         preedit: "",
@@ -790,12 +796,12 @@ private extension SquirrelInputController {
   }
 
   @discardableResult
-  func commit(string: String) -> Bool {
+  func commit(string: String, immediatelyHide: Bool = true) -> Bool {
     guard let client = client else { return false }
     client.insertText(string, replacementRange: .empty)
     InputArchiveEngine.shared.markEndpoint("insert_text")
     preedit = ""
-    hidePalettes()
+    hidePalettes(immediately: immediatelyHide)
     return true
   }
 
