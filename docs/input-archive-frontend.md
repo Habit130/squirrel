@@ -234,11 +234,38 @@ It is not pixels, host persistence, or ranking benefit.
 The space stalls were `orderOut` synchronizing with the window server while
 the panel was still visible, on both capture arms. Attempt 7 clears candidate
 content and hit targets before the handler returns, and removes an
-already-visible panel on the next main-queue turn. Deactivation, raw
-finalization, and global cleanup still hide immediately. An 80-pair diagnostic
-is not MEAS-189-v1 certification. A new pre-sample manifest and exact-head run
-are required before any Pass claim. The timing checker proves capture-on arms
-from the public timeline; it does not scan private detail for every process.
+already-visible panel on the next main-queue turn. A later `show` invalidates
+that removal, so it cannot hide the next composition. Deactivation, raw
+finalization, and global cleanup still hide immediately. An empty observation
+closes an open process. Idle Escape does not create one. Synchronized socket
+components are matched case-insensitively. The timing checker proves capture-on
+arms from the public timeline; it does not scan private detail for every process.
+
+The first attempt-7 timing invocation is retained and is not a Pass. Head
+`b7ed2408a819f6949960ab6f3e219e53e79ca2a7`. Pre-sample manifest SHA-256
+`2a4f753e57fbbccafd7b84f140d0a2ca23919257e65419000835c7af6e702abf`.
+Raw `.local/ac189-v2-a7-timing/raw-737fc6148587496e9d8dbe84466ebd47.json`,
+SHA-256 `25749f680069e62c372d7fc4e913a5fe2a1ce8185a3deddb89d3a273925d185a`,
+16,000 pairs. The checker exited 1 before writing a report: 12 capture-on arms
+did not advance sequence because main-queue draining ran after the fixture
+pre-state was built. That raw was not overwritten.
+
+The certification run drained deferred panel work before building the next
+pre-state. Pre-sample manifest SHA-256
+`b232328374e7ff8835157891b6dcec2382576ad271987116ecb1aebfab2b3343`,
+published at https://github.com/Habit130/squirrel/issues/189#issuecomment-6137147157
+before sampling. Measurement executable head
+`c601a19550a79b3b66784639b75c48d690097a75`. Harness SHA-256
+`2e31cd90d8411b283151e05229986f009338103f2d01824037f9b497a6b7ee2e`.
+Raw SHA-256 `b763f97084f0ecd8d9399e3e2aee7c6baee5d7e0d424f0f8f36ca45ae1c84246`.
+Public timeline proved 16,000/16,000 capture-on arms. Capacity stop was false.
+Configured capacity 2,147,483,648 bytes; durable bytes 371,186,590. Report
+SHA-256 `3b2f2ddcfd15c85067caea9e07c62bad5697058200fe0ad3a3234fb607d6e284`,
+`passed=true`. Whole-return paired p95/p99 milliseconds: short 0.150/0.410,
+long 0.015/0.035, backspace 0.142/0.355, retype 0.237/0.500, number 0.263/0.573,
+space 0.047/0.113, mouse 0.034/0.048, paging 0.043/0.056. All eight strata met
+1/3 ms. This is an Execution measurement, not Acceptance, not pixels, and not
+a claim that capture is free.
 
 Attempt 3 has not produced a certified timing run. Its sampling gate requires
 a naturally Secure-Input-off, confirmed quiet window, and the secure-input flag
