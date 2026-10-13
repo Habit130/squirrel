@@ -148,7 +148,8 @@ enum InputArchiveFrontendHarness {
     case "timing":
       runTiming()
     case "timing-diagnostic":
-      runTiming(strata: [arguments["stratum"] ?? "space"], pairs: 80, warmup: 10)
+      let pairs = Int(arguments["pairs"] ?? "") ?? 80
+      runTiming(strata: [arguments["stratum"] ?? "space"], pairs: pairs, warmup: 5)
     case "empty-boundaries":
       runEmptyBoundaries()
     case "absent":
@@ -487,11 +488,14 @@ enum InputArchiveFrontendHarness {
       // eligible while the composition is cleared and the stratum pre-state is
       // composed, so neither arm inherits an unobserved prefix. Only the
       // measured operation itself runs with the arm's eligibility applied.
+      // Finish the previous arm's deferred panel removal before building this
+      // pre-state. Draining after prepare can run that removal against the
+      // composition about to be measured.
+      drainMainQueue()
       InputArchiveEngine.shared.setMeasurementSuppressed(false)
       clearComposition()
       selectLuna()
       prepare(stratum)
-      drainMainQueue()
       InputArchiveEngine.shared.setMeasurementSuppressed(arm == "off")
       let beforePanel = NSApp.squirrelAppDelegate.panel?.updateCompletionCount ?? 0
       let beforeStatus = InputArchiveEngine.shared.contentFreeStatus()
