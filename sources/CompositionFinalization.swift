@@ -34,6 +34,7 @@ struct CompositionFinalizationState: Equatable {
 enum CompositionClientAction: Equatable {
   case leaveUnchanged
   case commitOnce(String)
+  case unavailableClient
   case clearLocalState
 }
 
@@ -91,8 +92,8 @@ enum CompositionFinalization {
 
     let pending = state.pendingInput ?? ""
     let clientAction: CompositionClientAction
-    if state.hasClient && !pending.isEmpty {
-      clientAction = .commitOnce(pending)
+    if !pending.isEmpty {
+      clientAction = state.hasClient ? .commitOnce(pending) : .unavailableClient
     } else {
       clientAction = .clearLocalState
     }
