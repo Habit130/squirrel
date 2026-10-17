@@ -200,9 +200,12 @@ insertion only: it adds no serialization, disk, socket, acknowledgement, drain,
 or lock wait to the input path, and a refused or lost timing record cannot
 change text, marked text, or candidate order. A timing record outranks queued
 pages for sending but never displaces one, so it cannot evict the observation it
-references; when the queue is full it is refused and counted. Collector-side
-queue loss remains a separate, counted outcome with its own loss notices. One
-timing record and two update calls are the fixed per-action bound.
+references; when the queue is full it is refused and counted. If a referenced
+observation is dropped before the timing record is sent (in-queue displacement,
+a failed requeue, or a permanent transport refusal), the dependent timing record
+is dropped with it and accounted as a known loss. Loss after the collector
+accepted both rows is a separate, counted collector outcome with its own loss
+notices. One timing record and two update calls are the fixed per-action bound.
 
 Two isolated checks bind the timing source contract. The new
 `scripts/check-input-archive-frontend-timing.py` compiles the committed head,

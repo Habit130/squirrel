@@ -251,7 +251,8 @@ extension InputArchiveProducer {
       size: size,
       socketPath: socketPath,
       bindingGeneration: bindingGeneration,
-      attempts: 0
+      attempts: 0,
+      references: kind == "provenance" ? Self.references(in: snapshot) : []
     )
     if fitsLocked(size) {
       queue.append(item)
@@ -263,7 +264,9 @@ extension InputArchiveProducer {
     // displaced page would leave a dangling reference in the archive.
     if priority == "high" && displaceable {
       if let index = queue.firstIndex(where: { $0.priority == "low" }) {
+        let displaced = queue[index]
         dropLocked(index)
+        dropDependentMetadataLocked(referenced: Self.references(in: displaced.snapshot))
         queue.append(item)
         queuedBytes += size
         return InputArchiveAdmission(admitted: true, code: "admitted", captureSequence: nil, priority: priority)
@@ -272,6 +275,28 @@ extension InputArchiveProducer {
     knownRefused += 1
     rememberLossLocked(item, reason: "queue_saturated")
     return InputArchiveAdmission(admitted: false, code: "queue_saturated", captureSequence: nil, priority: priority)
+  }
+
+  private static func references(in snapshot: [String: Any]) -> [String] {
+    [snapshot["update_id"], snapshot["commit_id"]].compactMap { value in
+      guard let token = value as? String, InputArchiveTokens.isSafe(token) else { return nil }
+      return token
+    }
+  }
+
+  /// A queued metadata record whose referenced identity is dropped cannot be
+  /// sent as a valid observation. Drop it with the same honest accounting.
+  private func dropDependentMetadataLocked(referenced: [String]) {
+    guard !referenced.isEmpty else { return }
+    let identities = Set(referenced)
+    var index = queue.count - 1
+    while index >= 0 {
+      let item = queue[index]
+      if !item.references.isEmpty && !identities.isDisjoint(with: item.references) {
+        dropLocked(index)
+      }
+      index -= 1
+    }
   }
 
   private func fitsLocked(_ size: Int) -> Bool {
@@ -379,6 +404,7 @@ extension InputArchiveProducer {
         knownDropped += 1
         knownRefused += 1
         rememberLossLocked(item, reason: "requeue_saturated")
+        dropDependentMetadataLocked(referenced: Self.references(in: item.snapshot))
       }
     }
     return !retries.isEmpty
@@ -394,6 +420,7 @@ extension InputArchiveProducer {
     if reason != "identity_conflict" {
       rememberLossLocked(item, reason: reason)
     }
+    dropDependentMetadataLocked(referenced: Self.references(in: item.snapshot))
   }
 }
 
@@ -561,6 +588,9 @@ private struct QueuedObservation {
   var socketPath: String
   var bindingGeneration: UInt64
   var attempts: Int
+  /// Owned identities a queued metadata record points at. If one of these is
+  /// dropped before the metadata is sent, the metadata must be dropped too.
+  var references: [String] = []
 }
 
 private enum DeliveryOutcome {
