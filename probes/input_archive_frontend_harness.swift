@@ -14,6 +14,9 @@ final class RecordingTextClient: NSObject, IMKTextInput {
   var marked: [String] = []
   var insertTicks: [UInt64] = []
   var markedTicks: [UInt64] = []
+  /// Isolated timing harness only: runs at the marked-text call boundary so the
+  /// checker can prove that no completed sample exists before that call returns.
+  var markedTextBarrier: (() -> Void)?
 
   func reset() {
     inserts = []
@@ -30,6 +33,10 @@ final class RecordingTextClient: NSObject, IMKTextInput {
   func setMarkedText(_ string: Any!, selectionRange: NSRange, replacementRange: NSRange) {
     marked.append(text(from: string))
     markedTicks.append(InputArchiveClock.now())
+    if let barrier = markedTextBarrier {
+      markedTextBarrier = nil
+      barrier()
+    }
   }
 
   func selectedRange() -> NSRange { NSRange(location: 0, length: 0) }
@@ -91,6 +98,14 @@ enum InputArchiveFrontendHarness {
   static var queueSaturationStatus: [String: String] = [:]
   static var timingPreflightStatus: [String: Any] = [:]
   static var emptyBoundaryIdentities: [String: [String: String]] = [:]
+  static var timingBarrier: [String: Any] = [:]
+  static var timingEndpoints: [String: Any] = [:]
+  static var timingIdentities: [String: Any] = [:]
+  static var timingNumeric: [String: Any] = [:]
+  static var timingNested: [String: Any] = [:]
+  static var timingExclusions: [String: Any] = [:]
+  static var timingFaults: [String: Any] = [:]
+  static var timingBehavior: [String: Any] = [:]
 
   static func main() {
     let arguments = parse(CommandLine.arguments)
@@ -134,6 +149,11 @@ enum InputArchiveFrontendHarness {
     }
     if scenario == "path-controls" {
       runAncestorAliasControl(pathRoot: arguments["path-root"] ?? "")
+      emit(arguments["report"])
+      exit(failures.isEmpty ? 0 : 1)
+    }
+    if scenario == "timing-numeric" {
+      runTimingNumeric()
       emit(arguments["report"])
       exit(failures.isEmpty ? 0 : 1)
     }
@@ -182,6 +202,22 @@ enum InputArchiveFrontendHarness {
       runResumeLocal()
     case "queue-saturate":
       runQueueSaturate()
+    case "timing-barrier":
+      runTimingBarrier(arguments)
+    case "timing-endpoints":
+      runTimingEndpoints()
+    case "timing-identities":
+      runTimingIdentities()
+    case "timing-numeric":
+      runTimingNumeric()
+    case "timing-nested":
+      runTimingNested()
+    case "timing-exclusions":
+      runTimingExclusions(phase: arguments["phase"] ?? "baseline")
+    case "timing-faults":
+      runTimingFaults(arguments)
+    case "timing-behavior":
+      runTimingBehavior()
     case "socket-call":
       runSocketCall(socket: arguments["socket"] ?? "")
     case "sender-call":
@@ -1121,6 +1157,652 @@ enum InputArchiveFrontendHarness {
     }
   }
 
+  // MARK: - AC-203 timing scenarios
+
+  static func timingStatus() -> [String: String] {
+    InputArchiveEngine.shared.contentFreeStatus()
+  }
+
+  static func sequenceValue(_ status: [String: String]) -> Int {
+    Int(status["source_local_sequence"] ?? "") ?? -1
+  }
+
+  static func counterValue(_ status: [String: String], _ key: String) -> Int {
+    Int(status[key] ?? "") ?? -1
+  }
+
+  static func writeMarker(_ path: String, _ object: [String: Any]) {
+    guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
+    try? data.write(to: URL(fileURLWithPath: path), options: [.withoutOverwriting])
+  }
+
+  static func waitForFile(_ path: String, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+      if FileManager.default.fileExists(atPath: path) { return true }
+      Thread.sleep(forTimeInterval: 0.005)
+    }
+    return FileManager.default.fileExists(atPath: path)
+  }
+
+  static func runTimingBarrier(_ arguments: [String: String]) {
+    expect(waitForPolicy("enabled"), "timing barrier policy not fresh")
+    let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
+    guard let controller else {
+      fail("timing barrier controller unavailable")
+      return
+    }
+    let heldPath = arguments["barrier-held"] ?? ""
+    let releasePath = arguments["barrier-release"] ?? ""
+    expect(!heldPath.isEmpty && !releasePath.isEmpty, "timing barrier paths missing")
+    selectLuna()
+    clearComposition()
+    client.reset()
+    let beforeStatus = timingStatus()
+    let beforeTicks = InputArchiveClock.now()
+    let beforeRecords = counterValue(beforeStatus, "timing_records")
+    var actionId = ""
+    var markedTicks: UInt64 = 0
+    client.markedTextBarrier = {
+      let status = timingStatus()
+      actionId = status["current_action_id"] ?? ""
+      markedTicks = client.markedTicks.last ?? 0
+      writeMarker(heldPath, [
+        "action_id": actionId,
+        "source_instance_id": beforeStatus["source_instance_id"] ?? "",
+        "sequence_before": beforeStatus["source_local_sequence"] ?? "",
+        "timing_records_before": beforeRecords,
+        "before_ticks": InputArchiveTimingConversion.timestamp(beforeTicks) ?? 0,
+        "marked_ticks": InputArchiveTimingConversion.timestamp(markedTicks) ?? 0,
+        "endpoint_before_release": status["endpoint"] ?? "",
+        "content_included": false
+      ])
+      expect(waitForFile(releasePath, timeout: 10), "timing barrier was not released")
+    }
+    let handled = controller.handle(keyEvent(keyCode: 45, characters: "n", flags: []), client: client)
+    let afterTicks = InputArchiveClock.now()
+    let afterStatus = timingStatus()
+    expect(handled, "timing barrier key was not handled")
+    expect(!actionId.isEmpty, "timing barrier captured no action identity")
+    expect(actionId == afterStatus["last_action_id"], "timing barrier action identity did not complete")
+    expect(counterValue(afterStatus, "timing_records") == beforeRecords + 1, "timing barrier did not admit exactly one record")
+    expect(InputArchiveEngine.shared.waitUntilDrained(timeout: 5), "timing barrier record did not drain")
+    timingBarrier = [
+      "action_id": actionId,
+      "source_instance_id": afterStatus["source_instance_id"] ?? "",
+      "sequence_before": beforeStatus["source_local_sequence"] ?? "",
+      "sequence_after": afterStatus["source_local_sequence"] ?? "",
+      "timing_records_before": beforeRecords,
+      "timing_records_after": counterValue(afterStatus, "timing_records"),
+      "before_ticks": InputArchiveTimingConversion.timestamp(beforeTicks) ?? 0,
+      "marked_ticks": InputArchiveTimingConversion.timestamp(markedTicks) ?? 0,
+      "after_ticks": InputArchiveTimingConversion.timestamp(afterTicks) ?? 0,
+      "endpoint": afterStatus["endpoint"] ?? "",
+      "content_included": false
+    ]
+    clearComposition()
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+  }
+
+  static func timingCase(_ name: String, _ body: () -> Void) -> [String: Any] {
+    let before = timingStatus()
+    let insertsBefore = client.inserts.count
+    body()
+    let after = timingStatus()
+    return [
+      "case": name,
+      "source_instance_id": after["source_instance_id"] ?? "",
+      "sequence_before": before["source_local_sequence"] ?? "",
+      "sequence_after": after["source_local_sequence"] ?? "",
+      "action_id": after["last_action_id"] ?? "",
+      "timing_records_before": counterValue(before, "timing_records"),
+      "timing_records_after": counterValue(after, "timing_records"),
+      "refused_gate_before": counterValue(before, "timing_refused_gate"),
+      "refused_gate_after": counterValue(after, "timing_refused_gate"),
+      "refused_no_process_before": counterValue(before, "timing_refused_no_process"),
+      "refused_no_process_after": counterValue(after, "timing_refused_no_process"),
+      "refused_no_observation_before": counterValue(before, "timing_refused_no_observation"),
+      "refused_no_observation_after": counterValue(after, "timing_refused_no_observation"),
+      "unknown_endpoint_before": counterValue(before, "timing_unknown_endpoint"),
+      "unknown_endpoint_after": counterValue(after, "timing_unknown_endpoint"),
+      "inserts_added": client.inserts.count - insertsBefore,
+      "content_included": false
+    ]
+  }
+
+  static func runTimingEndpoints() {
+    expect(waitForPolicy("enabled"), "timing endpoints policy not fresh")
+    let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
+    guard let controller else {
+      fail("timing endpoints controller unavailable")
+      return
+    }
+    selectLuna()
+    clearComposition()
+    client.reset()
+
+    timingEndpoints["panel"] = timingCase("panel_endpoint") {
+      type("n")
+    }
+
+    // The candidate panel is temporarily absent for this key, so the marked-text
+    // call is the last update call the action actually completes.
+    type("n")
+    let panel = NSApp.squirrelAppDelegate.panel
+    NSApp.squirrelAppDelegate.panel = nil
+    timingEndpoints["marked_text"] = timingCase("marked_text_endpoint") {
+      type("i")
+    }
+    NSApp.squirrelAppDelegate.panel = panel
+    expect(NSApp.squirrelAppDelegate.panel != nil, "panel control was not restored")
+    clearComposition()
+
+    type("nihao")
+    timingEndpoints["commit"] = timingCase("commit_action") {
+      sendKey(49, " ")
+    }
+    expect(client.inserts.filter { $0.contains("你好") }.count == 1, "commit endpoint case did not insert once")
+    clearComposition()
+
+    typeCode("jiazheng")
+    timingEndpoints["raw"] = timingCase("raw_finalization") {
+      controller.commitComposition(client)
+    }
+    expect(client.inserts.filter { $0.contains("jiazheng") }.count == 1, "raw endpoint case did not insert once")
+    clearComposition()
+
+    type("ni")
+    timingEndpoints["command"] = timingCase("command_shortcut") {
+      let command = keyEvent(keyCode: 0, characters: "a", flags: .command)
+      let handled = controller.handle(command, client: client)
+      expect(!handled, "command shortcut was consumed")
+    }
+    clearComposition()
+
+    timingEndpoints["idle"] = timingCase("idle_empty") {
+      sendKey(53, "\u{1b}")
+    }
+
+    typeCode("nihao")
+    timingEndpoints["unavailable"] = timingCase("unavailable_client") {
+      controller.archiveSetClientForFixture(nil)
+      controller.commitComposition(NSObject())
+      controller.archiveSetClientForFixture(client)
+    }
+    expect((timingEndpoints["unavailable"] as? [String: Any])?["inserts_added"] as? Int == 0,
+           "unavailable endpoint case invented an insert")
+    clearComposition()
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 5)
+  }
+
+  static func runTimingIdentities() {
+    expect(waitForPolicy("enabled"), "timing identities policy not fresh")
+    let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
+    guard let controller else {
+      fail("timing identities controller unavailable")
+      return
+    }
+    selectLuna()
+    clearComposition()
+    client.reset()
+
+    var identities: [String: Any] = ["content_included": false]
+    type("nihao")
+    identities["equal_first"] = timingCase("equal_first") {
+      sendKey(49, " ")
+    }
+    clearComposition()
+    type("nihao")
+    identities["equal_second"] = timingCase("equal_second") {
+      sendKey(49, " ")
+    }
+    expect(client.inserts.filter { $0.contains("你好") }.count == 2, "equal-text commits were not inserted twice")
+    clearComposition()
+
+    typeCode("jiazheng")
+    let beforeRaw = timingStatus()
+    controller.deactivateServer(client)
+    controller.activateServer(client)
+    let afterRaw = timingStatus()
+    identities["raw"] = [
+      "source_instance_id": afterRaw["source_instance_id"] ?? "",
+      "sequence_before": beforeRaw["source_local_sequence"] ?? "",
+      "sequence_after": afterRaw["source_local_sequence"] ?? "",
+      "action_id": afterRaw["last_action_id"] ?? "",
+      "process_before": beforeRaw["process_id"] ?? "",
+      "process_after": afterRaw["process_id"] ?? "",
+      "segment_before": beforeRaw["segment_id"] ?? "",
+      "segment_after": afterRaw["segment_id"] ?? ""
+    ]
+    identities["next_key"] = timingCase("next_key_after_raw") {
+      type("n")
+    }
+    clearComposition()
+
+    let beforeRetarget = timingStatus()
+    client.bundle = "com.ac203.other"
+    let retarget = timingCase("retarget") {
+      type("h")
+    }
+    client.bundle = "com.ac189.fixture"
+    let afterRetarget = timingStatus()
+    identities["retarget"] = retarget.merging([
+      "source_instance_id": afterRetarget["source_instance_id"] ?? "",
+      "segment_before": beforeRetarget["segment_id"] ?? "",
+      "segment_after": afterRetarget["segment_id"] ?? ""
+    ]) { _, new in new }
+    clearComposition()
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 5)
+    timingIdentities = identities
+  }
+
+  static func runTimingNumeric() {
+    let timebase = InputArchiveClock.timebase
+    var synthetic = mach_timebase_info_data_t()
+    synthetic.numer = UInt32.max
+    synthetic.denom = 1
+    let normal = InputArchiveTimingConversion.interval(start: 24_000, end: 48_000, timebase: timebase)
+    let expected = InputArchiveTimingConversion.nanoseconds(ticks: 24_000, timebase: timebase)
+    let overflow = InputArchiveTimingConversion.interval(start: 1, end: UInt64.max, timebase: synthetic)
+    let zeroLength = InputArchiveTimingConversion.interval(start: 100, end: 100, timebase: timebase)
+    let nonmonotone = InputArchiveTimingConversion.interval(start: 200, end: 100, timebase: timebase)
+    let absentStart = InputArchiveTimingConversion.interval(start: 0, end: 100, timebase: timebase)
+    let unrepresentable = InputArchiveTimingConversion.timestamp(UInt64.max)
+
+    var validFrame = InputArchiveActionFrame(actionId: "actnumeric1", action: "key_handler", entryTicks: 1_000)
+    validFrame.markedTextTicks = 1_200
+    validFrame.panelUpdateTicks = 1_300
+    validFrame.observedProcessId = "procnumeric1"
+    validFrame.observedSegmentId = "segnumeric1"
+    let validObject = InputArchiveFrontendTimingV1.object(
+      frame: validFrame,
+      sourceInstanceId: "srcnumeric1",
+      processId: "procnumeric1",
+      operation: "key_update"
+    )
+    var unknownFrame = InputArchiveActionFrame(actionId: "actnumeric2", action: "raw_finalization", entryTicks: 2_000)
+    unknownFrame.commitStartTicks = 2_100
+    unknownFrame.commitEndTicks = 2_150
+    unknownFrame.observedProcessId = "procnumeric2"
+    let unknownObject = InputArchiveFrontendTimingV1.object(
+      frame: unknownFrame,
+      sourceInstanceId: "srcnumeric1",
+      processId: "procnumeric2",
+      operation: "raw_finalization"
+    )
+    var invalidFrame = InputArchiveActionFrame(actionId: "actnumeric3", action: "key_handler", entryTicks: 3_000)
+    invalidFrame.panelUpdateTicks = 2_900
+    invalidFrame.observedProcessId = "procnumeric3"
+    let invalidObject = InputArchiveFrontendTimingV1.object(
+      frame: invalidFrame,
+      sourceInstanceId: "srcnumeric1",
+      processId: "procnumeric3",
+      operation: "key_update"
+    )
+
+    timingNumeric = [
+      "normal_ns": normal ?? 0,
+      "expected_ns": expected ?? 0,
+      "normal_matches": normal == expected && normal != nil,
+      "overflow_rejected": overflow == nil,
+      "zero_length_rejected": zeroLength == nil,
+      "nonmonotone_rejected": nonmonotone == nil,
+      "absent_start_rejected": absentStart == nil,
+      "unrepresentable_rejected": unrepresentable == nil,
+      "valid_version": validObject?["version"] as? Int ?? 0,
+      "valid_validity": validObject?["validity"] as? String ?? "",
+      "valid_endpoint": validObject?["endpoint"] as? String ?? "",
+      "valid_duration": validObject?["duration_ns"] as? UInt64 ?? 0,
+      "valid_expected_duration": InputArchiveTimingConversion.nanoseconds(ticks: 300, timebase: timebase) ?? 0,
+      "valid_update_calls": (validObject?["update_calls"] as? [Any])?.count ?? 0,
+      "unknown_validity": unknownObject?["validity"] as? String ?? "",
+      "unknown_reason": unknownObject?["unknown_reason"] as? String ?? "",
+      "unknown_has_duration": unknownObject?["duration_ns"] != nil,
+      "unknown_commit_validity": ((unknownObject?["commit_call"] as? [String: Any])?["validity"] as? String) ?? "",
+      "invalid_validity": invalidObject?["validity"] as? String ?? "",
+      "invalid_reason": invalidObject?["unknown_reason"] as? String ?? "",
+      "invalid_has_duration": invalidObject?["duration_ns"] != nil,
+      "content_included": false
+    ]
+    expect(normal == expected && normal != nil, "normal timing conversion did not match its own nanoseconds")
+    expect(overflow == nil && zeroLength == nil && nonmonotone == nil && absentStart == nil,
+           "a malformed timing interval was not rejected")
+    expect(validObject?["validity"] as? String == "valid", "valid timing frame was not valid")
+    expect(unknownObject?["validity"] as? String == "unknown", "commit-only frame was not unknown")
+    expect(invalidObject?["validity"] as? String == "invalid", "nonmonotone frame was not invalid")
+  }
+
+  static func runTimingNested() {
+    expect(waitForPolicy("enabled"), "timing nested policy not fresh")
+    let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
+    guard let controller else {
+      fail("timing nested controller unavailable")
+      return
+    }
+    selectLuna()
+    clearComposition()
+    client.reset()
+    let engine = InputArchiveEngine.shared
+    let before = timingStatus()
+    engine.beginAction("key_handler", eventTimestamp: nil)
+    engine.notePendingOperation("key_update")
+    // The nested entry is a real production handler invocation. It must fold
+    // into the owning action instead of minting a second sample.
+    let handled = controller.handle(keyEvent(keyCode: 45, characters: "n", flags: []), client: client)
+    engine.finishAction()
+    let after = timingStatus()
+    expect(handled, "nested production key was not handled")
+    expect(after["action_depth"] == "0", "nested action depth did not return to zero")
+    expect(counterValue(after, "timing_nested_actions") == counterValue(before, "timing_nested_actions") + 1,
+           "nested action was not counted exactly once")
+    expect(counterValue(after, "timing_records") == counterValue(before, "timing_records") + 1,
+           "nested control did not admit exactly one timing record")
+    _ = engine.waitUntilDrained(timeout: 5)
+    timingNested = [
+      "action_id": after["last_action_id"] ?? "",
+      "source_instance_id": after["source_instance_id"] ?? "",
+      "sequence_before": before["source_local_sequence"] ?? "",
+      "sequence_after": after["source_local_sequence"] ?? "",
+      "timing_records_before": counterValue(before, "timing_records"),
+      "timing_records_after": counterValue(after, "timing_records"),
+      "nested_actions_before": counterValue(before, "timing_nested_actions"),
+      "nested_actions_after": counterValue(after, "timing_nested_actions"),
+      "content_included": false
+    ]
+    clearComposition()
+    _ = engine.waitUntilDrained(timeout: 3)
+  }
+
+  static func runTimingExclusions(phase: String) {
+    let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
+    guard let controller = controller else {
+      fail("timing exclusions controller unavailable")
+      return
+    }
+    _ = controller
+    var report: [String: Any] = ["phase": phase, "content_included": false]
+    switch phase {
+    case "baseline":
+      expect(waitForPolicy("enabled"), "baseline policy not fresh")
+      selectLuna()
+      clearComposition()
+      client.reset()
+      report["baseline"] = timingCase("baseline") { type("n") }
+    case "paused":
+      expect(waitForPolicy("paused"), "pause was not locally observed")
+      selectLuna()
+      clearComposition()
+      client.reset()
+      let insertsBefore = client.inserts.count
+      report["paused"] = timingCase("paused") {
+        typeCode("jiamin")
+        sendKey(49, " ")
+      }
+      expect(client.inserts.count > insertsBefore, "paused phase did not deliver committed text")
+    case "resumed":
+      expect(waitForPolicy("enabled"), "resume was not locally observed")
+      selectLuna()
+      clearComposition()
+      client.reset()
+      report["resumed"] = timingCase("resumed") { type("n") }
+    case "secure":
+      expect(waitForPolicy("enabled"), "secure phase policy not fresh")
+      selectLuna()
+      clearComposition()
+      client.reset()
+      let insertsBefore = client.inserts.count
+      InputArchiveSignals.secureEventInputEnabled = { true }
+      report["secure"] = timingCase("secure") {
+        typeCode("jiamin")
+        sendKey(49, " ")
+      }
+      InputArchiveSignals.secureEventInputEnabled = { false }
+      expect(client.inserts.count > insertsBefore, "secure phase did not deliver committed text")
+      clearComposition()
+      report["healthy"] = timingCase("healthy_after_secure") { type("n") }
+    case "schema":
+      expect(waitForPolicy("enabled"), "schema phase policy not fresh")
+      selectLuna()
+      clearComposition()
+      client.reset()
+      selectOtherSchema()
+      let insertsBefore = client.inserts.count
+      report["other_schema"] = timingCase("other_schema") {
+        typeCode("jiachi")
+        sendKey(49, " ")
+      }
+      expect(client.inserts.count > insertsBefore, "other-schema phase did not deliver committed text")
+      clearComposition()
+      selectLuna()
+      report["healthy"] = timingCase("healthy_after_schema") { type("n") }
+    case "stale":
+      let deadline = Date().addingTimeInterval(5)
+      var fresh = timingStatus()["fresh"] ?? "unknown"
+      while fresh == "true" && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.05)
+        fresh = timingStatus()["fresh"] ?? "unknown"
+      }
+      report["fresh_before"] = fresh
+      selectLuna()
+      clearComposition()
+      client.reset()
+      let insertsBefore = client.inserts.count
+      report["stale"] = timingCase("stale_policy") {
+        typeCode("jiazheng")
+        sendKey(49, " ")
+      }
+      expect(client.inserts.count > insertsBefore, "stale-policy phase did not deliver committed text")
+    default:
+      fail("unknown timing exclusion phase \(phase)")
+    }
+    let after = timingStatus()
+    report["source_instance_id"] = after["source_instance_id"] ?? ""
+    report["sequence_after"] = after["source_local_sequence"] ?? ""
+    report["observed_desired"] = after["observed_desired"] ?? ""
+    report["fresh"] = after["fresh"] ?? ""
+    report["timing_records_after"] = counterValue(after, "timing_records")
+    report["content_included"] = false
+    clearComposition()
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+    timingExclusions = report
+  }
+
+  static func runTimingFaults(_ arguments: [String: String]) {
+    let phase = arguments["phase"] ?? "absent"
+    let engine = InputArchiveEngine.shared
+    let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
+    var report: [String: Any] = ["phase": phase, "content_included": false]
+    switch phase {
+    case "absent":
+      engine.bind(socket: "")
+      selectLuna()
+      clearComposition()
+      client.reset()
+      let started = InputArchiveClock.now()
+      for _ in 0..<40 {
+        type("nihao")
+      }
+      let elapsed = InputArchiveClock.nanoseconds(from: InputArchiveClock.now() &- started)
+      report["source_instance_id"] = timingStatus()["source_instance_id"] ?? ""
+      report["elapsed_ns"] = elapsed
+      report["client_updates"] = client.marked.count + client.inserts.count
+      report["status"] = timingStatus().filter { $0.key != "source_instance_id" }
+      expect(elapsed < 2_000_000_000, "absent collector burst exceeded the 2000ms watchdog")
+      expect(!client.marked.isEmpty || !client.inserts.isEmpty, "absent collector burst produced no client update")
+      clearComposition()
+    case "held":
+      expect(waitForPolicy("enabled"), "held phase policy not fresh")
+      selectLuna()
+      clearComposition()
+      client.reset()
+      let readyPath = arguments["ready"] ?? ""
+      let goPath = arguments["go"] ?? ""
+      expect(!readyPath.isEmpty && !goPath.isEmpty, "held phase coordination paths missing")
+      writeMarker(readyPath, ["fresh": timingStatus()["fresh"] ?? "", "content_included": false])
+      expect(waitForFile(goPath, timeout: 10), "held phase was not released by the checker")
+      let started = InputArchiveClock.now()
+      for _ in 0..<80 {
+        type("nihao")
+      }
+      let elapsed = InputArchiveClock.nanoseconds(from: InputArchiveClock.now() &- started)
+      let status = timingStatus()
+      report["source_instance_id"] = status["source_instance_id"] ?? ""
+      report["elapsed_ns"] = elapsed
+      report["client_updates"] = client.marked.count + client.inserts.count
+      report["status"] = status.filter { $0.key != "source_instance_id" }
+      report["queued"] = counterValue(status, "queued")
+      report["known_dropped"] = counterValue(status, "known_dropped")
+      report["known_refused"] = counterValue(status, "known_refused")
+      report["unreported_loss_notices"] = counterValue(status, "unreported_loss_notices")
+      report["timing_records"] = counterValue(status, "timing_records")
+      expect(elapsed < 2_000_000_000, "held collector burst exceeded the 2000ms watchdog")
+      expect(!client.marked.isEmpty || !client.inserts.isEmpty, "held collector burst produced no client update")
+      clearComposition()
+    default:
+      fail("unknown timing fault phase \(phase)")
+    }
+    report["content_included"] = false
+    timingFaults = report
+  }
+
+  static func runTimingBehavior() {
+    let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
+    InputArchiveSignals.secureEventInputEnabled = { false }
+    defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
+    guard let controller else {
+      fail("timing behavior controller unavailable")
+      return
+    }
+    let on = behaviorTrace(suppressed: false, controller: controller)
+    let off = behaviorTrace(suppressed: true, controller: controller)
+    let equal = on.inserts == off.inserts
+      && on.marked == off.marked
+      && on.preedit == off.preedit
+      && on.candidates == off.candidates
+      && on.pages == off.pages
+      && on.lastPages == off.lastPages
+      && on.handled == off.handled
+    timingBehavior = [
+      "arms_equal": equal,
+      "insert_once_ok": on.insertOnce && off.insertOnce,
+      "marked_cleanup_ok": on.markedCleanup && off.markedCleanup,
+      "commit_arm_equal": on.commitInserts == off.commitInserts,
+      "page_arm_equal": on.pagedCandidates == off.pagedCandidates,
+      "command_not_consumed": !on.commandConsumed && !off.commandConsumed,
+      "steps": on.steps,
+      "on_inserts": on.inserts.count,
+      "off_inserts": off.inserts.count,
+      "content_included": false
+    ]
+    expect(equal, "capture off/on behavior traces diverged")
+    expect(on.insertOnce && off.insertOnce, "a commit was not inserted exactly once in both arms")
+    expect(on.markedCleanup && off.markedCleanup, "marked text was not cleaned up in both arms")
+    expect(!on.commandConsumed && !off.commandConsumed, "a command shortcut was consumed in one arm")
+  }
+
+  private struct BehaviorTrace {
+    var inserts: [String] = []
+    var marked: [String] = []
+    var preedit: [String] = []
+    var candidates: [[String]] = []
+    var pages: [Int] = []
+    var lastPages: [Bool] = []
+    var handled: [Bool] = []
+    var steps = 0
+    var insertOnce = true
+    var markedCleanup = true
+    var commitInserts: [String] = []
+    var pagedCandidates: [String] = []
+    var commandConsumed = false
+  }
+
+  private static func behaviorTrace(suppressed: Bool, controller: SquirrelInputController) -> BehaviorTrace {
+    InputArchiveEngine.shared.setMeasurementSuppressed(suppressed)
+    defer { InputArchiveEngine.shared.setMeasurementSuppressed(false) }
+    var trace = BehaviorTrace()
+    func snapshot(_ handled: Bool) {
+      trace.steps += 1
+      trace.inserts.append(contentsOf: client.inserts)
+      trace.marked.append(contentsOf: client.marked)
+      trace.preedit.append(NSApp.squirrelAppDelegate.panel?.fixturePreedit ?? "")
+      trace.candidates.append(NSApp.squirrelAppDelegate.panel?.fixtureCandidates ?? [])
+      trace.pages.append(NSApp.squirrelAppDelegate.panel?.fixturePage ?? -1)
+      trace.lastPages.append(NSApp.squirrelAppDelegate.panel?.fixtureLastPage ?? true)
+      trace.handled.append(handled)
+    }
+    selectLuna()
+    clearComposition()
+    client.reset()
+    type("niha")
+    snapshot(true)
+
+    sendBackspace()
+    type("o")
+    snapshot(true)
+
+    sendKey(19, "2")
+    snapshot(true)
+
+    clearComposition()
+    client.reset()
+    type("nihao")
+    let commitHandled = controller.handle(keyEvent(keyCode: 49, characters: " ", flags: []), client: client)
+    trace.commitInserts = client.inserts
+    trace.insertOnce = trace.insertOnce && client.inserts.filter { $0.contains("你好") }.count == 1
+    let panel = NSApp.squirrelAppDelegate.panel
+    trace.markedCleanup = trace.markedCleanup && (panel?.contentView?.isHidden == true && panel?.ignoresMouseEvents == true)
+    snapshot(commitHandled)
+
+    clearComposition()
+    client.reset()
+    type("nihao")
+    _ = controller.page(up: false)
+    trace.pagedCandidates = NSApp.squirrelAppDelegate.panel?.fixtureCandidates ?? []
+    _ = controller.selectCandidate(1)
+    snapshot(true)
+
+    clearComposition()
+    client.reset()
+    typeCode("jiazheng")
+    controller.deactivateServer(client)
+    controller.activateServer(client)
+    trace.insertOnce = trace.insertOnce && client.inserts.filter { $0.contains("jiazheng") }.count == 1
+    snapshot(true)
+
+    clearComposition()
+    client.reset()
+    type("ni")
+    client.bundle = "com.ac203.behavior"
+    type("h")
+    client.bundle = "com.ac189.fixture"
+    snapshot(true)
+
+    clearComposition()
+    client.reset()
+    type("ni")
+    let command = keyEvent(keyCode: 0, characters: "a", flags: .command)
+    let commandHandled = controller.handle(command, client: client)
+    trace.commandConsumed = commandHandled
+    snapshot(commandHandled)
+
+    clearComposition()
+    snapshot(true)
+    _ = InputArchiveEngine.shared.waitUntilDrained(timeout: 3)
+    return trace
+  }
+
   /// A held/failing collector must not block the real input path. The whole
   /// burst is timed by a separate watchdog bound rather than by the sender.
   static func runFaultBurst() {
@@ -1421,7 +2103,15 @@ enum InputArchiveFrontendHarness {
       "policy_identities": policyIdentities,
       "queue_saturation": queueSaturationStatus,
       "timing_preflight": timingPreflightStatus,
-      "empty_boundary_identities": emptyBoundaryIdentities
+      "empty_boundary_identities": emptyBoundaryIdentities,
+      "timing_barrier": timingBarrier,
+      "timing_endpoints": timingEndpoints,
+      "timing_identities": timingIdentities,
+      "timing_numeric": timingNumeric,
+      "timing_nested": timingNested,
+      "timing_exclusions": timingExclusions,
+      "timing_faults": timingFaults,
+      "timing_behavior": timingBehavior
     ]
     guard let path, let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted]) else {
       return

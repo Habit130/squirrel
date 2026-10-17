@@ -31,6 +31,10 @@ final class InputArchiveEngine {
   var compositionUnobserved = false
   var timing = InputArchiveTiming()
   private var metadataPublishedBeforeEngine = false
+  private var actionDepth = 0
+  private var actionFrame: InputArchiveActionFrame?
+  private var lastCompletedActionId = ""
+  private var timingCounters = InputArchiveTimingCounters()
 
   private init() {}
 
@@ -50,6 +54,13 @@ final class InputArchiveEngine {
       updateId = ""
       parentUpdateId = nil
       lastCaptureEnabled = false
+      if var frame = actionFrame {
+        // The observation admitted for this action must not be replayed at a
+        // different collector binding after a rebind.
+        frame.excluded = true
+        frame.continuityCut = true
+        actionFrame = frame
+      }
       if processOpen {
         compositionUnobserved = true
       }
@@ -66,29 +77,6 @@ final class InputArchiveEngine {
   func setMeasurementSuppressed(_ suppressed: Bool) {
     lock.lock()
     measurementSuppressed = suppressed
-    lock.unlock()
-  }
-
-  func beginAction(_ name: String, eventTimestamp: TimeInterval?) {
-    lock.lock()
-    timing = InputArchiveTiming()
-    timing.action = name
-    timing.entryTicks = InputArchiveClock.now()
-    timing.eventQueueWait = Self.queueWait(eventTimestamp)
-    metadataPublishedBeforeEngine = false
-    lock.unlock()
-  }
-
-  func finishAction() {
-    lock.lock()
-    timing.returnTicks = InputArchiveClock.now()
-    lock.unlock()
-  }
-
-  func markEndpoint(_ name: String) {
-    lock.lock()
-    timing.primaryEndTicks = InputArchiveClock.now()
-    timing.endpoint = name
     lock.unlock()
   }
 
@@ -134,6 +122,10 @@ final class InputArchiveEngine {
     segmentId = InputArchiveTokens.fresh("seg")
     associationValid = false
     updateId = ""
+    if var frame = actionFrame {
+      frame.continuityCut = true
+      actionFrame = frame
+    }
     if reason == "session_recreation" || reason == "deactivation" || reason == "restart" {
       processOpen = false
       processId = InputArchiveTokens.fresh("proc")
@@ -238,6 +230,17 @@ final class InputArchiveEngine {
     status["composition_unobserved"] = compositionUnobserved ? "true" : "false"
     status["endpoint"] = timing.endpoint
     status["action"] = timing.action
+    status["timing_actions"] = String(timingCounters.actions)
+    status["timing_records"] = String(timingCounters.admitted)
+    status["timing_refused_gate"] = String(timingCounters.refusedGate)
+    status["timing_refused_no_process"] = String(timingCounters.refusedNoProcess)
+    status["timing_refused_no_observation"] = String(timingCounters.refusedNoObservation)
+    status["timing_invalid_interval"] = String(timingCounters.invalidInterval)
+    status["timing_unknown_endpoint"] = String(timingCounters.unknownEndpoint)
+    status["timing_nested_actions"] = String(timingCounters.nested)
+    status["action_depth"] = String(actionDepth)
+    status["current_action_id"] = actionFrame?.actionId ?? ""
+    status["last_action_id"] = lastCompletedActionId
     status["legacy_selection_recording"] = "separately_configured_may_continue"
     status["legacy_switch_changed"] = "false"
     status["globally_effective"] = "false"
@@ -267,9 +270,14 @@ final class InputArchiveEngine {
     let changed = enabled != lastCaptureEnabled
     lastCaptureEnabled = enabled
     // Losing capture eligibility mid-composition makes that composition's
-    // earlier prefix unobserved for the new segment.
+    // earlier prefix unobserved for the new segment, and any action in flight
+    // cannot persist a timing sample that spans the excluded state.
     if changed && !enabled {
       compositionUnobserved = true
+      if var frame = actionFrame {
+        frame.excluded = true
+        actionFrame = frame
+      }
     }
     lock.unlock()
     if changed {
@@ -322,6 +330,14 @@ final class InputArchiveEngine {
     updateId = update
     associationValid = true
     lastRecordedPreedit = page.preedit
+    if var frame = actionFrame {
+      frame.observedProcessId = process
+      frame.observedSegmentId = segment
+      frame.updateId = update
+      frame.parentUpdateId = parent
+      frame.schemaId = page.schemaId
+      actionFrame = frame
+    }
     lock.unlock()
     var fields = baseFields(kind: kind, outcome: outcome, process: process, segment: segment, schema: page.schemaId)
     fields["update_id"] = update
@@ -329,11 +345,10 @@ final class InputArchiveEngine {
       fields["parent_update_id"] = parent
     }
     fields["stage"] = "frontend_update"
-    fields["payload"] = page.payload(operation: operation, timing: lastTiming())
+    fields["payload"] = page.payload(operation: operation)
     fields["host_persistence"] = "unknown"
     _ = admit(fields)
   }
-
 
   func admit(_ fields: [String: Any]) -> InputArchiveAdmission {
     let started = InputArchiveClock.now()
@@ -402,4 +417,236 @@ final class InputArchiveEngine {
     guard let timestamp, timestamp > 1 else { return "unknown" }
     return "unknown"
   }
+}
+
+extension InputArchiveEngine {
+  func beginAction(_ name: String, eventTimestamp: TimeInterval?) {
+    let entry = InputArchiveClock.now()
+    lock.lock()
+    timing = InputArchiveTiming()
+    timing.action = name
+    timing.entryTicks = entry
+    timing.eventQueueWait = Self.queueWait(eventTimestamp)
+    metadataPublishedBeforeEngine = false
+    if actionDepth == 0 {
+      actionFrame = InputArchiveActionFrame(
+        actionId: InputArchiveTokens.fresh("act"),
+        action: name,
+        entryTicks: entry
+      )
+      timingCounters.actions += 1
+    } else if var frame = actionFrame {
+      // A nested declared entry belongs to the active action. It never starts a
+      // second sample, and the bound is a count rather than retained history.
+      frame.nestedActions = min(frame.nestedActions + 1, InputArchiveTimingConversion.maxNestedActions)
+      actionFrame = frame
+      timingCounters.nested += 1
+    }
+    if actionDepth < Int.max {
+      actionDepth += 1
+    }
+    lock.unlock()
+  }
+
+  func finishAction() {
+    let returned = InputArchiveClock.now()
+    let captureEnabled = producer.captureEnabled()
+    let secure = InputArchiveSignals.secureEventInputEnabled()
+    let suppressed = measurementSuppressed
+    lock.lock()
+    timing.returnTicks = returned
+    if actionDepth > 0 {
+      actionDepth -= 1
+    }
+    var frame: InputArchiveActionFrame?
+    if actionDepth == 0 {
+      frame = actionFrame
+      actionFrame = nil
+      if let completed = frame {
+        lastCompletedActionId = completed.actionId
+      }
+    }
+    let operation = pendingOperation
+    let segment = segmentId
+    lock.unlock()
+    guard let frame else { return }
+    completeAction(
+      frame,
+      operation: operation,
+      fallbackSegment: segment,
+      captureEnabled: captureEnabled,
+      secure: secure,
+      suppressed: suppressed
+    )
+  }
+
+  func markEndpoint(_ name: String) {
+    // Only the marked-text and candidate-update calls complete the primary
+    // interval. A commit/insertText call is recorded separately.
+    guard name == "marked_text" || name == "panel_update" else { return }
+    let ticks = InputArchiveClock.now()
+    lock.lock()
+    timing.primaryEndTicks = ticks
+    timing.endpoint = name
+    if var frame = actionFrame {
+      if name == "marked_text" {
+        frame.markedTextTicks = ticks
+      } else {
+        frame.panelUpdateTicks = ticks
+      }
+      actionFrame = frame
+    }
+    lock.unlock()
+  }
+
+  func noteCommitCall(start: UInt64, end: UInt64) {
+    guard start > 0, end > start else { return }
+    lock.lock()
+    if var frame = actionFrame {
+      frame.commitStartTicks = start
+      frame.commitEndTicks = end
+      actionFrame = frame
+    }
+    lock.unlock()
+  }
+
+  /// Called by terminal admission paths in another file. The owning action
+  /// refuses a timing sample once an exclusion is observed inside it.
+  func markActionFrame(excluded: Bool = false, continuityCut: Bool = false) {
+    lock.lock()
+    if var frame = actionFrame {
+      if excluded {
+        frame.excluded = true
+      }
+      if continuityCut {
+        frame.continuityCut = true
+      }
+      actionFrame = frame
+    }
+    lock.unlock()
+  }
+
+  /// Copies owned references from a real observation into the owning action.
+  func captureActionReferences(
+    process: String,
+    segment: String,
+    update: String? = nil,
+    parent: String? = nil,
+    terminalUpdate: String? = nil,
+    commit: String? = nil,
+    schema: String
+  ) {
+    lock.lock()
+    if var frame = actionFrame {
+      frame.observedProcessId = process
+      frame.observedSegmentId = segment
+      if let update {
+        frame.updateId = update
+      }
+      if let parent {
+        frame.parentUpdateId = parent
+      }
+      if let terminalUpdate {
+        frame.terminalUpdateId = terminalUpdate
+      }
+      if let commit {
+        frame.commitId = commit
+      }
+      frame.schemaId = schema
+      actionFrame = frame
+    }
+    lock.unlock()
+  }
+
+  /// Completes one top-level declared action. At most one timing observation is
+  /// admitted; it is content-free and never changes input behavior.
+  private func completeAction(
+    _ frame: InputArchiveActionFrame,
+    operation: String,
+    fallbackSegment: String,
+    captureEnabled: Bool,
+    secure: Bool,
+    suppressed: Bool
+  ) {
+    var refusal: String?
+    if suppressed {
+      refusal = "measurement_suppressed"
+    } else if frame.excluded {
+      refusal = "excluded_during_action"
+    } else if secure {
+      refusal = "secure_input"
+    } else if !captureEnabled {
+      refusal = "policy_not_effective"
+    }
+    let schema = frame.schemaId ?? ""
+    if refusal == nil && schema != InputArchive.supportedSchema {
+      refusal = "no_supported_observation"
+    }
+    let process = frame.observedProcessId ?? ""
+    if refusal == nil && !InputArchiveTokens.isSafe(process) {
+      refusal = "no_process_association"
+    }
+    var object: [String: Any]?
+    if refusal == nil {
+      object = InputArchiveFrontendTimingV1.object(
+        frame: frame,
+        sourceInstanceId: producer.sourceId,
+        processId: process,
+        operation: operation
+      )
+      if object == nil {
+        refusal = "invalid_timing_object"
+      }
+    }
+    guard refusal == nil, let object else {
+      lock.lock()
+      switch refusal {
+      case "no_process_association":
+        timingCounters.refusedNoProcess += 1
+      case "no_supported_observation":
+        timingCounters.refusedNoObservation += 1
+      case "invalid_timing_object":
+        timingCounters.invalidInterval += 1
+      default:
+        timingCounters.refusedGate += 1
+      }
+      lock.unlock()
+      return
+    }
+    let segment = frame.observedSegmentId ?? fallbackSegment
+    var fields = baseFields(kind: "provenance", outcome: "unknown", process: process, segment: segment, schema: schema)
+    if let update = frame.updateId ?? frame.terminalUpdateId {
+      fields["update_id"] = update
+    }
+    if let parent = frame.parentUpdateId {
+      fields["parent_update_id"] = parent
+    }
+    if let commit = frame.commitId {
+      fields["commit_id"] = commit
+    }
+    fields["stage"] = "frontend_timing"
+    fields["payload"] = ["frontend_timing": object]
+    let result = admit(fields)
+    lock.lock()
+    if result.admitted {
+      timingCounters.admitted += 1
+    } else {
+      timingCounters.refusedGate += 1
+    }
+    if object["validity"] as? String != "valid" {
+      timingCounters.unknownEndpoint += 1
+    }
+    lock.unlock()
+  }
+}
+
+private struct InputArchiveTimingCounters {
+  var actions = 0
+  var admitted = 0
+  var refusedGate = 0
+  var refusedNoProcess = 0
+  var refusedNoObservation = 0
+  var invalidInterval = 0
+  var unknownEndpoint = 0
+  var nested = 0
 }

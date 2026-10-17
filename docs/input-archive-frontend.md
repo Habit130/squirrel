@@ -132,12 +132,68 @@ Malformed or mismatched replies are not treated as successful acknowledgements.
 ## Timing
 
 Keyboard latency starts at `handle(_:client:)` entry and ends when the
-corresponding marked-text or panel update call returns. If neither happens,
-the endpoint is `unavailable`. Mouse selection and paging start at
+corresponding marked-text or panel update call returns. If neither happens, the
+endpoint is `unavailable`. Mouse selection and paging start at
 `selectCandidate` and `page(up:)`, not at a fabricated key entry. These are
 update-call completions, not pixels, host persistence, or ranking benefit.
 `NSEvent.timestamp` is not treated as `mach_absolute_time`; event-queue wait
 stays `unknown` unless a compatible timestamp exists.
+
+### Current-action timing observations (`payload.frontend_timing` v1)
+
+Each completed top-level declared controller action admits at most one
+content-free timing observation. A declared action is one top-level
+`key_handler`, `mouse_selection`, `paging`, or `raw_finalization` entry.
+Nested entries inside an active action are folded into the owning action and
+counted (`nested_actions`); they never mint a second record or replace the
+owner's entry. The record is admitted only after the action returns, so no
+partial endpoint is sampled and no previous action's interval is reused. The
+observation kind is the already-supported `provenance`; the payload is exactly
+`{"frontend_timing": {...}}`.
+
+| Field | Type | Presence | Meaning |
+| --- | --- | --- | --- |
+| `version` | int | always | Schema version, currently `1`. |
+| `action_id` | token | always | Fresh per completed declared action within this source instance. |
+| `action` | string | always | `key_handler`, `mouse_selection`, `paging`, or `raw_finalization`. |
+| `operation` | token | always | The action's pending operation (`key_update`, `backspace`, `escape`, `number_select`, `space`, `flags`, `command`, `mouse_selection`, `paging`, `raw_finalization`). |
+| `clock.domain` | string | always | `mach_absolute_time`. |
+| `clock.unit` | string | always | `nanoseconds`. |
+| `clock.timebase_numer` / `clock.timebase_denom` | int | always | The process `mach_timebase_info`. |
+| `entry_ticks` | int | when the action started | Handler/action entry tick. |
+| `update_calls` | array | when a call completed | Completed marked-text and/or panel-update calls with their `ticks`, in completion order. |
+| `endpoint` | string | always | The last completed update call (`marked_text` or `panel_update`), else `unavailable`. |
+| `endpoint_ticks` | int | when an endpoint exists | Completion tick of that call. |
+| `duration_ns` | int | only when `validity` is `valid` | `endpoint_ticks - entry_ticks` in nanoseconds, computed with the record's timebase. |
+| `validity` | string | always | `valid`, `invalid`, or `unknown`. |
+| `unknown_reason` | string | when not `valid` | `no_update_call`, `missing_entry`, `nonmonotone_endpoint`, or `unrepresentable_endpoint`. |
+| `commit_call` | object | when an `insertText` call completed | `endpoint: insert_text`, `start_ticks`, `end_ticks`, `duration_ns`, `validity` (`valid`/`invalid`). This is a separately named call interval, not the primary endpoint and not host persistence. |
+| `event_queue_wait` | string | always | `unknown`. |
+| `nested_actions` | int | always | Nested declared entries folded into this action, bounded at 255. |
+| `continuity_cut` | bool | always | A continuity cut (retarget, pause, session recreation, rebind) happened inside the action. |
+| `association` | object | always | Owned references observed during the action: `source_instance_id`, `process_id`, and, when available, `continuity_segment_id`, `update_id`, `parent_update_id`, `terminal_update_id`, `commit_id`. |
+
+A zero-length or nonmonotone interval is `invalid` and carries no
+`duration_ns`; an absent update call is `unknown` with
+`unknown_reason: no_update_call`. A commit-only action (raw finalization, or a
+commit with no remaining context) therefore has an unknown primary endpoint and
+a separate valid `commit_call`. Old records without this object stay
+old/unknown; no timing is reconstructed from backend time, cadence, or text.
+
+The record follows the same opt-in, capture, secure-input, schema, and
+freshness gates as other observations. An action that was excluded or refused
+before or during its execution admits no timing record, and a refused timing
+observation is never replayed after resume or retarget; the next eligible
+action records normally. `timing_records`, `timing_refused_gate`,
+`timing_refused_no_process`, `timing_refused_no_observation`,
+`timing_invalid_interval`, and `timing_unknown_endpoint` in the local
+content-free status distinguish those outcomes. A healthy action with no open
+process or no supported-schema observation admits nothing rather than inventing
+an empty process. Timing admission is a bounded queue insertion only: it adds
+no serialization, disk, socket, acknowledgement, drain, or lock wait to the
+input path, and a refused or lost timing record cannot change text, marked
+text, or candidate order. One timing record and two update calls are the fixed
+per-action bound.
 
 The isolated check is `scripts/check-input-archive-frontend.py`. It exports a
 fresh checkout of the committed head, compiles that seam against the staged
