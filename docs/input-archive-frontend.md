@@ -171,7 +171,7 @@ observation kind is the already-supported `provenance`; the payload is exactly
 | `event_queue_wait` | string | always | `unknown`. |
 | `nested_actions` | int | always | Nested declared entries folded into this action, bounded at 255. |
 | `continuity_cut` | bool | always | A continuity cut (retarget, pause, session recreation, rebind) happened inside the action. |
-| `association` | object | always | Owned references observed during the action: `source_instance_id`, `process_id`, and, when available, `continuity_segment_id`, `update_id`, `parent_update_id`, `terminal_update_id`, `commit_id`. |
+| `association` | object | always | Owned references observed during the action: `source_instance_id`, `process_id`, and, when available, `continuity_segment_id`, `update_id`, `terminal_update_id`, `commit_id`. Every reference belongs to the record's own process and was admitted durably; a commit that closed a previous process is not attached to its replacement's record. |
 
 A zero-length or nonmonotone interval is `invalid` and carries no
 `duration_ns`; an absent update call is `unknown` with

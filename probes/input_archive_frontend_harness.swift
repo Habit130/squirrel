@@ -1365,6 +1365,33 @@ enum InputArchiveFrontendHarness {
     expect(client.inserts.filter { $0.contains("你好") }.count == 2, "equal-text commits were not inserted twice")
     clearComposition()
 
+    // A commit that closes a process while the action continues in a
+    // replacement process: the production terminal admission and the real
+    // nested handler observation must not attach the old commit to the new
+    // process. This is a seam-level control around the production paths.
+    clearComposition()
+    client.reset()
+    type("ni")
+    let replacementBefore = timingStatus()
+    let engine = InputArchiveEngine.shared
+    engine.beginAction("key_handler", eventTimestamp: nil)
+    engine.notePendingOperation("key_update")
+    engine.recordCommit("fixture", schema: InputArchive.supportedSchema)
+    let replacementHandled = controller.handle(keyEvent(keyCode: 45, characters: "n", flags: []), client: client)
+    engine.finishAction()
+    let replacementAfter = timingStatus()
+    expect(replacementHandled, "replacement-process control key was not handled")
+    expect(replacementAfter["action_depth"] == "0", "replacement-process control depth did not return to zero")
+    identities["replacement"] = [
+      "action_id": replacementAfter["last_action_id"] ?? "",
+      "source_instance_id": replacementAfter["source_instance_id"] ?? "",
+      "sequence_before": replacementBefore["source_local_sequence"] ?? "",
+      "sequence_after": replacementAfter["source_local_sequence"] ?? "",
+      "process_before": replacementBefore["process_id"] ?? "",
+      "process_after": replacementAfter["process_id"] ?? "",
+      "content_included": false
+    ]
+
     typeCode("jiazheng")
     let beforeRaw = timingStatus()
     controller.deactivateServer(client)

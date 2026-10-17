@@ -45,6 +45,8 @@ REQUIRED_CASES = (
     "identity_retarget_segment",
     "nested_single_sample",
     "nested_raw_finalization",
+    "identity_replacement_process",
+    "timing_reference_integrity",
     "unknown_idle_command_unavailable",
     "numeric_conversion_self_test",
     "exclusions_pause_resume",
@@ -388,6 +390,8 @@ engine:
 speller:
   alphabet: zyxwvutsrqponmlkjihgfedcba
   delimiter: " '"
+menu:
+  alternative_select_keys: "12345"
 translator:
   dictionary: luna_pinyin
 """
@@ -436,6 +440,8 @@ engine:
     - script_translator
 speller:
   alphabet: zyxwvutsrqponmlkjihgfedcba
+menu:
+  alternative_select_keys: "12345"
 translator:
   dictionary: other_schema
 """
@@ -1260,6 +1266,59 @@ def contract(args):
                 retarget_failures.append("stale_segment")
         results.record("identity_retarget_segment", case_failure("retarget", retarget_failures), {"rows": len(retarget_rows)})
 
+        # --- replacement process after a closed composition ---
+        replacement_failures = []
+        replacement_case = identity_report.get("replacement") or {}
+        replacement_rows = rows_in_range(
+            timing_rows(rows),
+            replacement_case.get("sequence_before", 0),
+            replacement_case.get("sequence_after", 0),
+            replacement_case.get("source_instance_id"),
+        )
+        if not replacement_case:
+            replacement_failures.append("case_missing")
+        if len(replacement_rows) != 1:
+            replacement_failures.append("row_count")
+        else:
+            replacement_row = replacement_rows[0]
+            commits = [
+                candidate for candidate in rows
+                if candidate.get("observation_kind") == "commit_attempt"
+                and candidate.get("source_instance_id") == replacement_row.get("source_instance_id")
+                and isinstance(candidate.get("source_local_sequence"), int)
+                and int(replacement_case.get("sequence_before", 0)) < candidate["source_local_sequence"] <= int(replacement_case.get("sequence_after", 0))
+            ]
+            if len(commits) != 1:
+                replacement_failures.append("commit_row_count")
+            elif commits[0].get("process_id") == replacement_row.get("process_id"):
+                replacement_failures.append("replacement_process")
+            payload = fetch_payload(backend_path, socket, replacement_row)
+            timing = (payload or {}).get("frontend_timing") or {}
+            association = timing.get("association") or {}
+            if association.get("commit_id") is not None:
+                replacement_failures.append("stale_commit_reference")
+            if replacement_row.get("commit_id") is not None:
+                replacement_failures.append("top_level_commit_reference")
+            if association.get("process_id") != replacement_row.get("process_id"):
+                replacement_failures.append("association_process")
+            if replacement_row.get("process_id") == replacement_case.get("process_before"):
+                replacement_failures.append("stale_process")
+            pages = [
+                candidate for candidate in rows
+                if candidate.get("process_id") == replacement_row.get("process_id")
+                and candidate.get("update_id") == replacement_row.get("update_id")
+                and candidate.get("observation_kind") in ("input_change", "replacement", "temporary_selection", "start")
+            ]
+            if not pages:
+                replacement_failures.append("replacement_page_relation")
+            if timing_object_violation(payload) is not None:
+                replacement_failures.append("content")
+        results.record(
+            "identity_replacement_process",
+            case_failure("replacement", replacement_failures),
+            {"rows": len(replacement_rows)},
+        )
+
         # --- nested control ---
         report = os.path.join(root, "timing-nested.json")
         code, out, err, leaked = harness(binary, shared, user, log, socket, "timing-nested", report)
@@ -1525,6 +1584,59 @@ def contract(args):
         probe_results, probe_exits = run_probes(os.path.join(root, "behavior-probes"), iso_root)
         probe_failures = [name for name, result in probe_results.items() if result != "pass"]
         results.record("five_probes", case_failure("probes", probe_failures), {"results": probe_results, "exits": probe_exits})
+
+        # --- global timing reference integrity ---
+        reference_failures = []
+        code, rows, err = query_timeline(backend_path, socket)
+        reference_rows = timing_rows(rows) if code == 0 else []
+        if code != 0:
+            reference_failures.append("query_failed")
+        else:
+            detail_cache = {}
+            for row in reference_rows:
+                process_id = row.get("process_id")
+                if process_id not in detail_cache:
+                    detail_code, detail_rows, detail_err = query_process_detail(backend_path, socket, process_id)
+                    detail_cache[process_id] = {
+                        detail.get("source_local_sequence"): detail
+                        for detail in detail_rows if detail.get("observation_kind") == "provenance"
+                    }
+                detail = detail_cache[process_id].get(row.get("source_local_sequence")) or {}
+                payload = detail.get("payload")
+                timing = (payload or {}).get("frontend_timing") or {}
+                association = timing.get("association") or {}
+                if association.get("process_id") != row.get("process_id"):
+                    reference_failures.append("association_process")
+                    break
+                if association.get("source_instance_id") != row.get("source_instance_id"):
+                    reference_failures.append("association_source")
+                    break
+                if association.get("update_id") != row.get("update_id"):
+                    reference_failures.append("association_update")
+                    break
+                for key, identity_key in (
+                    ("update_id", "update_id"),
+                    ("terminal_update_id", "update_id"),
+                    ("commit_id", "commit_id"),
+                ):
+                    value = association.get(key)
+                    if not value:
+                        continue
+                    if not any(
+                        candidate.get(identity_key) == value
+                        and candidate.get("process_id") == row.get("process_id")
+                        and candidate.get("source_instance_id") == row.get("source_instance_id")
+                        for candidate in rows
+                    ):
+                        reference_failures.append("dangling_%s" % key)
+                        break
+                if reference_failures:
+                    break
+        results.record(
+            "timing_reference_integrity",
+            case_failure("references", reference_failures),
+            {"timing_rows": len(reference_rows)},
+        )
 
         # --- privacy and docs ---
         privacy_failures = []

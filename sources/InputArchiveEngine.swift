@@ -337,14 +337,6 @@ final class InputArchiveEngine {
     updateId = update
     associationValid = true
     lastRecordedPreedit = page.preedit
-    if var frame = actionFrame {
-      frame.observedProcessId = process
-      frame.observedSegmentId = segment
-      frame.updateId = update
-      frame.parentUpdateId = parent
-      frame.schemaId = page.schemaId
-      actionFrame = frame
-    }
     lock.unlock()
     var fields = baseFields(kind: kind, outcome: outcome, process: process, segment: segment, schema: page.schemaId)
     fields["update_id"] = update
@@ -354,7 +346,19 @@ final class InputArchiveEngine {
     fields["stage"] = "frontend_update"
     fields["payload"] = page.payload(operation: operation)
     fields["host_persistence"] = "unknown"
-    _ = admit(fields)
+    let result = admit(fields)
+    if result.admitted {
+      // Only a durable page may contribute owned references. A page refused by
+      // queue saturation must not leave an update identity that the archive
+      // never stored.
+      captureActionReferences(
+        process: process,
+        segment: segment,
+        update: update,
+        parent: parent,
+        schema: page.schemaId
+      )
+    }
   }
 
   func admit(_ fields: [String: Any]) -> InputArchiveAdmission {
@@ -534,6 +538,9 @@ extension InputArchiveEngine {
   }
 
   /// Copies owned references from a real observation into the owning action.
+  /// References always belong to one process: when an observation belongs to a
+  /// replacement process, the previous process's references are dropped rather
+  /// than attached to the new one.
   func captureActionReferences(
     process: String,
     segment: String,
@@ -545,6 +552,12 @@ extension InputArchiveEngine {
   ) {
     lock.lock()
     if var frame = actionFrame {
+      if let current = frame.observedProcessId, current != process {
+        frame.updateId = nil
+        frame.parentUpdateId = nil
+        frame.terminalUpdateId = nil
+        frame.commitId = nil
+      }
       frame.observedProcessId = process
       frame.observedSegmentId = segment
       if let update {
@@ -624,9 +637,6 @@ extension InputArchiveEngine {
     var fields = baseFields(kind: "provenance", outcome: "unknown", process: process, segment: segment, schema: schema)
     if let update = frame.updateId ?? frame.terminalUpdateId {
       fields["update_id"] = update
-    }
-    if let parent = frame.parentUpdateId {
-      fields["parent_update_id"] = parent
     }
     if let commit = frame.commitId {
       fields["commit_id"] = commit

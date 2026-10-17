@@ -122,9 +122,6 @@ enum InputArchiveFrontendTimingV1 {
     if let update = frame.updateId, InputArchiveTokens.isSafe(update) {
       association["update_id"] = update
     }
-    if let parent = frame.parentUpdateId, InputArchiveTokens.isSafe(parent) {
-      association["parent_update_id"] = parent
-    }
     if let terminalUpdate = frame.terminalUpdateId, InputArchiveTokens.isSafe(terminalUpdate) {
       association["terminal_update_id"] = terminalUpdate
     }

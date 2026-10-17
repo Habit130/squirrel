@@ -96,13 +96,6 @@ extension InputArchiveEngine {
     parentUpdateId = nil
     updateId = ""
     lock.unlock()
-    captureActionReferences(
-      process: process,
-      segment: segment,
-      terminalUpdate: update,
-      commit: commitId,
-      schema: schema
-    )
     var fields = baseFields(kind: kind, outcome: outcome, process: process, segment: segment, schema: schema)
     fields["update_id"] = update
     fields["commit_id"] = commitId
@@ -125,7 +118,17 @@ extension InputArchiveEngine {
         "client_present": clientPresent
       ]
     }
-    _ = admit(fields)
+    let result = admit(fields)
+    if result.admitted {
+      // Only a durable terminal may contribute a commit identity.
+      captureActionReferences(
+        process: process,
+        segment: segment,
+        terminalUpdate: update,
+        commit: commitId,
+        schema: schema
+      )
+    }
   }
 
   func admitExclusion() {
