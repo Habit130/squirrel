@@ -1611,9 +1611,16 @@ def contract(args):
                 if association.get("source_instance_id") != row.get("source_instance_id"):
                     reference_failures.append("association_source")
                     break
-                if association.get("update_id") != row.get("update_id"):
-                    reference_failures.append("association_update")
-                    break
+                association_update = association.get("update_id")
+                terminal_update = association.get("terminal_update_id")
+                if association_update:
+                    if association_update != row.get("update_id"):
+                        reference_failures.append("association_update")
+                        break
+                elif terminal_update:
+                    if terminal_update != row.get("update_id"):
+                        reference_failures.append("association_terminal_update")
+                        break
                 for key, identity_key in (
                     ("update_id", "update_id"),
                     ("terminal_update_id", "update_id"),
