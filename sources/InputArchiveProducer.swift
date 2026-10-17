@@ -70,6 +70,8 @@ final class InputArchiveProducer {
       queue.removeAll(keepingCapacity: true)
       queuedBytes = 0
       localLosses.removeAll(keepingCapacity: true)
+      knownDropped += deferredMetadata.count
+      unreportedLossNotices += deferredMetadata.count
       deferredMetadata.removeAll(keepingCapacity: true)
       acceptedIdentities.removeAll(keepingCapacity: true)
       acceptedOrder.removeAll(keepingCapacity: true)
