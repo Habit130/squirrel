@@ -30,3 +30,6 @@ docs/orchestration/execution-prompts/*
 # Frozen owner-machine session handoffs.
 docs/orchestration/handoffs/*.md
 !docs/orchestration/handoffs/README.md
+
+# Delivery evidence root for the AC-203 timing observations.
+.local-work/

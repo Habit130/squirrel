@@ -36,7 +36,7 @@ struct InputArchiveOwnedPage {
     clientPresent = snapshot.clientPresent
   }
 
-  func payload(operation: String, timing: InputArchiveTiming) -> [String: Any] {
+  func payload(operation: String) -> [String: Any] {
     [
       "text": preedit,
       "preedit": preedit,
@@ -50,12 +50,7 @@ struct InputArchiveOwnedPage {
       "application": InputArchiveTokens.token(application, fallback: "unknown_app"),
       "operation": operation,
       "candidate_order": "frontend_page_as_received",
-      "host_persistence": "unknown",
-      "clock_domain": timing.clockDomain,
-      "endpoint": timing.endpoint,
-      "event_queue_wait": timing.eventQueueWait,
-      "timebase_numer": Int(InputArchiveClock.timebase.numer),
-      "timebase_denom": Int(InputArchiveClock.timebase.denom)
+      "host_persistence": "unknown"
     ]
   }
 }

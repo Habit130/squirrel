@@ -281,6 +281,7 @@ final class SquirrelInputController: IMKInputController {
     self.client ?= sender as? IMKTextInput
     InputArchiveEngine.shared.beginAction("raw_finalization", eventTimestamp: nil)
     defer { InputArchiveEngine.shared.finishAction() }
+    InputArchiveEngine.shared.notePendingOperation("raw_finalization")
     publishArchiveMetadata()
     guard session != 0 else { return }
     let operationSchema = currentOperationSchema()
@@ -433,9 +434,10 @@ private extension SquirrelInputController {
       hidePalettes()
       return
     }
+    let callStart = InputArchiveClock.now()
     client.insertText(text, replacementRange: .empty)
+    InputArchiveEngine.shared.noteCommitCall(start: callStart, end: InputArchiveClock.now())
     InputArchiveEngine.shared.recordRaw(text, schema: schema)
-    InputArchiveEngine.shared.markEndpoint("insert_text")
     preedit = ""
     hidePalettes()
   }
@@ -798,8 +800,9 @@ private extension SquirrelInputController {
   @discardableResult
   func commit(string: String, immediatelyHide: Bool = true) -> Bool {
     guard let client = client else { return false }
+    let callStart = InputArchiveClock.now()
     client.insertText(string, replacementRange: .empty)
-    InputArchiveEngine.shared.markEndpoint("insert_text")
+    InputArchiveEngine.shared.noteCommitCall(start: callStart, end: InputArchiveClock.now())
     preedit = ""
     hidePalettes(immediately: immediatelyHide)
     return true

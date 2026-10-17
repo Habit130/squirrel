@@ -118,7 +118,17 @@ extension InputArchiveEngine {
         "client_present": clientPresent
       ]
     }
-    _ = admit(fields)
+    let result = admit(fields)
+    if result.admitted {
+      // Only a durable terminal may contribute a commit identity.
+      captureActionReferences(
+        process: process,
+        segment: segment,
+        terminalUpdate: update,
+        commit: commitId,
+        schema: schema
+      )
+    }
   }
 
   func admitExclusion() {
@@ -136,14 +146,16 @@ extension InputArchiveEngine {
 
   /// A terminal refused for privacy/policy reasons ends a composition that was
   /// never fully observed. Keep the boundary content-free instead of letting a
-  /// later admitted snapshot carry the unobserved prefix.
+  /// later admitted snapshot carry the unobserved prefix, and refuse any timing
+  /// sample for an action that spanned the excluded state.
   func markCompositionUnobserved() {
     lock.lock()
     compositionUnobserved = true
     lock.unlock()
+    markActionFrame(excluded: true)
   }
 
-  private func closeExcludedComposition() {
+  private func closeExcludedComposition(excluded: Bool = true) {
     lock.lock()
     processOpen = false
     associationValid = false
@@ -154,11 +166,14 @@ extension InputArchiveEngine {
     parentUpdateId = nil
     updateId = ""
     lock.unlock()
+    if excluded {
+      markActionFrame(excluded: true)
+    }
   }
 
   /// An empty pending composition is a boundary, not an unavailable client.
   /// Close the unobserved flag without opening a process or persisting a row.
   func noteEmptyInputBoundary() {
-    closeExcludedComposition()
+    closeExcludedComposition(excluded: false)
   }
 }
