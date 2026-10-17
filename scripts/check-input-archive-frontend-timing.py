@@ -44,6 +44,7 @@ REQUIRED_CASES = (
     "identity_raw_then_next_key",
     "identity_retarget_segment",
     "nested_single_sample",
+    "nested_raw_finalization",
     "unknown_idle_command_unavailable",
     "numeric_conversion_self_test",
     "exclusions_pause_resume",
@@ -845,6 +846,10 @@ def contract(args):
             failures.append("invalid_semantics")
         if timing_numeric.get("invalid_has_duration") is not False:
             failures.append("invalid_duration")
+        if timing_numeric.get("missing_entry_validity") != "invalid" or timing_numeric.get("missing_entry_reason") != "missing_entry":
+            failures.append("missing_entry_semantics")
+        if timing_numeric.get("missing_entry_has_duration") is not False:
+            failures.append("missing_entry_duration")
         if leaked:
             failures.append("content_leak")
         results.record("numeric_conversion_self_test", case_failure("numeric", failures), {"numeric": timing_numeric})
@@ -1265,19 +1270,20 @@ def contract(args):
             nested_failures.append("harness_exit")
         if leaked:
             nested_failures.append("content_leak")
-        nested_wait = nested.get("timing_nested") or {}
+        nested_phases = nested.get("timing_nested") or {}
+        key_phase = nested_phases.get("key") or {}
+        raw_phase = nested_phases.get("raw") or {}
         wait_for_durable(
             backend_path, socket,
-            nested_wait.get("source_instance_id"),
-            int(nested_wait.get("sequence_after", 0) or 0),
+            raw_phase.get("source_instance_id"),
+            int(raw_phase.get("sequence_after", 0) or 0),
         )
         code, rows, err = query_timeline(backend_path, socket)
-        nested_report = nested.get("timing_nested") or {}
         nested_rows = rows_in_range(
             timing_rows(rows),
-            nested_report.get("sequence_before", 0),
-            nested_report.get("sequence_after", 0),
-            nested_report.get("source_instance_id"),
+            key_phase.get("sequence_before", 0),
+            key_phase.get("sequence_after", 0),
+            key_phase.get("source_instance_id"),
         )
         if len(nested_rows) != 1:
             nested_failures.append("row_count")
@@ -1286,11 +1292,44 @@ def contract(args):
             timing = (payload or {}).get("frontend_timing") or {}
             if timing.get("nested_actions") != 1:
                 nested_failures.append("nested_count")
-            if timing.get("action_id") != nested_report.get("action_id"):
+            if timing.get("action_id") != key_phase.get("action_id"):
                 nested_failures.append("action_identity")
             if timing.get("validity") != "valid":
                 nested_failures.append("validity")
         results.record("nested_single_sample", case_failure("nested", nested_failures), {"rows": len(nested_rows)})
+
+        raw_nested_failures = []
+        raw_rows = rows_in_range(
+            timing_rows(rows),
+            raw_phase.get("sequence_before", 0),
+            raw_phase.get("sequence_after", 0),
+            raw_phase.get("source_instance_id"),
+        )
+        if len(raw_rows) != 1:
+            raw_nested_failures.append("row_count")
+        else:
+            payload = fetch_payload(backend_path, socket, raw_rows[0])
+            timing = (payload or {}).get("frontend_timing") or {}
+            if timing.get("action") != "key_handler" or timing.get("operation") != "key_update":
+                raw_nested_failures.append("owner_identity")
+            if timing.get("nested_actions") != 1:
+                raw_nested_failures.append("nested_count")
+            commit_call = timing.get("commit_call") or {}
+            if commit_call.get("validity") != "valid":
+                raw_nested_failures.append("commit_call")
+            if timing.get("continuity_cut") is not True:
+                raw_nested_failures.append("cut_flag")
+            terminal = [
+                candidate for candidate in rows
+                if candidate.get("observation_kind") == "raw_finalization"
+                and candidate.get("commit_id") == raw_rows[0].get("commit_id")
+                and candidate.get("process_id") == raw_rows[0].get("process_id")
+            ]
+            if not terminal:
+                raw_nested_failures.append("raw_relation")
+            if timing_object_violation(payload) is not None:
+                raw_nested_failures.append("content")
+        results.record("nested_raw_finalization", case_failure("nested_raw", raw_nested_failures), {"rows": len(raw_rows)})
 
         # --- behavior parity ---
         report = os.path.join(root, "timing-behavior.json")

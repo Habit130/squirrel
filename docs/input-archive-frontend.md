@@ -177,25 +177,43 @@ A zero-length or nonmonotone interval is `invalid` and carries no
 `duration_ns`; an absent update call is `unknown` with
 `unknown_reason: no_update_call`. A commit-only action (raw finalization, or a
 commit with no remaining context) therefore has an unknown primary endpoint and
-a separate valid `commit_call`. Old records without this object stay
-old/unknown; no timing is reconstructed from backend time, cadence, or text.
+a separate valid `commit_call`. `missing_entry` and `unrepresentable_endpoint`
+are defensive bases for a malformed or unrepresentable action clock. Old
+records without this object stay old/unknown; no timing is reconstructed from
+backend time, cadence, or text. Page/update payloads no longer carry their own
+timing fields; an action's timing lives only in this versioned object.
 
 The record follows the same opt-in, capture, secure-input, schema, and
 freshness gates as other observations. An action that was excluded or refused
 before or during its execution admits no timing record, and a refused timing
 observation is never replayed after resume or retarget; the next eligible
-action records normally. `timing_records`, `timing_refused_gate`,
-`timing_refused_no_process`, `timing_refused_no_observation`,
-`timing_invalid_interval`, and `timing_unknown_endpoint` in the local
-content-free status distinguish those outcomes. A healthy action with no open
-process or no supported-schema observation admits nothing rather than inventing
-an empty process. Timing admission is a bounded queue insertion only: it adds
-no serialization, disk, socket, acknowledgement, drain, or lock wait to the
-input path, and a refused or lost timing record cannot change text, marked
-text, or candidate order. One timing record and two update calls are the fixed
-per-action bound.
+action records normally. The local content-free status distinguishes the
+outcomes: `timing_records` (admitted), `timing_refused_gate` (policy, secure,
+suppressed, or excluded during the action), `timing_refused_no_process` and
+`timing_refused_no_observation` (nothing owned to associate),
+`timing_refused_object` (unsafe or unrepresentable timing object),
+`timing_refused_admission` (queue saturation or loss after a valid object), and
+`timing_unknown_endpoint` (admitted with unknown/invalid validity). A healthy
+action with no open process or no supported-schema observation admits nothing
+rather than inventing an empty process. Timing admission is a bounded queue
+insertion only: it adds no serialization, disk, socket, acknowledgement, drain,
+or lock wait to the input path, and a refused or lost timing record cannot
+change text, marked text, or candidate order. One timing record and two update
+calls are the fixed per-action bound.
 
-The isolated check is `scripts/check-input-archive-frontend.py`. It exports a
+Two isolated checks bind the timing source contract. The new
+`scripts/check-input-archive-frontend-timing.py` compiles the committed head,
+drives the declared timing cases into a genuine collector, and verifies the
+persisted `frontend_timing` objects:
+
+```sh
+/usr/bin/python3 scripts/check-input-archive-frontend-timing.py --self-test
+/usr/bin/python3 scripts/check-input-archive-frontend-timing.py --suite contract \
+  --root "$ROOT" --backend librime/plugins/llm-rerank --library-dir lib --report "$REPORT"
+```
+
+The broader `scripts/check-input-archive-frontend.py` remains the accepted
+frontend archive check. It exports a
 fresh checkout of the committed head, compiles that seam against the staged
 librime library and the accepted read-only backend, and does not install a
 live input source. Besides the contract and schema-gate scenarios it drives

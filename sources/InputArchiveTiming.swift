@@ -49,6 +49,7 @@ enum InputArchiveTimingConversion {
 struct InputArchiveActionFrame {
   var actionId: String
   var action: String
+  var operation: String?
   var entryTicks: UInt64
   var markedTextTicks: UInt64 = 0
   var panelUpdateTicks: UInt64 = 0

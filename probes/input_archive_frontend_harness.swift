@@ -1445,6 +1445,15 @@ enum InputArchiveFrontendHarness {
       processId: "procnumeric3",
       operation: "key_update"
     )
+    var missingEntryFrame = InputArchiveActionFrame(actionId: "actnumeric4", action: "key_handler", entryTicks: 0)
+    missingEntryFrame.panelUpdateTicks = 500
+    missingEntryFrame.observedProcessId = "procnumeric4"
+    let missingEntryObject = InputArchiveFrontendTimingV1.object(
+      frame: missingEntryFrame,
+      sourceInstanceId: "srcnumeric1",
+      processId: "procnumeric4",
+      operation: "key_update"
+    )
 
     timingNumeric = [
       "normal_ns": normal ?? 0,
@@ -1468,6 +1477,9 @@ enum InputArchiveFrontendHarness {
       "invalid_validity": invalidObject?["validity"] as? String ?? "",
       "invalid_reason": invalidObject?["unknown_reason"] as? String ?? "",
       "invalid_has_duration": invalidObject?["duration_ns"] != nil,
+      "missing_entry_validity": missingEntryObject?["validity"] as? String ?? "",
+      "missing_entry_reason": missingEntryObject?["unknown_reason"] as? String ?? "",
+      "missing_entry_has_duration": missingEntryObject?["duration_ns"] != nil,
       "content_included": false
     ]
     expect(normal == expected && normal != nil, "normal timing conversion did not match its own nanoseconds")
@@ -1476,6 +1488,9 @@ enum InputArchiveFrontendHarness {
     expect(validObject?["validity"] as? String == "valid", "valid timing frame was not valid")
     expect(unknownObject?["validity"] as? String == "unknown", "commit-only frame was not unknown")
     expect(invalidObject?["validity"] as? String == "invalid", "nonmonotone frame was not invalid")
+    expect(missingEntryObject?["validity"] as? String == "invalid"
+             && missingEntryObject?["unknown_reason"] as? String == "missing_entry",
+           "absent entry frame was not rejected")
   }
 
   static func runTimingNested() {
@@ -1487,49 +1502,82 @@ enum InputArchiveFrontendHarness {
       fail("timing nested controller unavailable")
       return
     }
+    let engine = InputArchiveEngine.shared
+    var report: [String: Any] = ["content_included": false]
+
     selectLuna()
     clearComposition()
     client.reset()
-    let engine = InputArchiveEngine.shared
-    let before = timingStatus()
+    let beforeKey = timingStatus()
     engine.beginAction("key_handler", eventTimestamp: nil)
     engine.notePendingOperation("key_update")
     // The nested entry is a real production handler invocation. It must fold
     // into the owning action instead of minting a second sample.
     let handled = controller.handle(keyEvent(keyCode: 45, characters: "n", flags: []), client: client)
     engine.finishAction()
-    let after = timingStatus()
+    let afterKey = timingStatus()
     expect(handled, "nested production key was not handled")
-    expect(after["action_depth"] == "0", "nested action depth did not return to zero")
-    expect(counterValue(after, "timing_nested_actions") == counterValue(before, "timing_nested_actions") + 1,
+    expect(afterKey["action_depth"] == "0", "nested action depth did not return to zero")
+    expect(counterValue(afterKey, "timing_nested_actions") == counterValue(beforeKey, "timing_nested_actions") + 1,
            "nested action was not counted exactly once")
-    expect(counterValue(after, "timing_records") == counterValue(before, "timing_records") + 1,
-           "nested control did not admit exactly one timing record")
-    _ = engine.waitUntilDrained(timeout: 5)
-    timingNested = [
-      "action_id": after["last_action_id"] ?? "",
-      "source_instance_id": after["source_instance_id"] ?? "",
-      "sequence_before": before["source_local_sequence"] ?? "",
-      "sequence_after": after["source_local_sequence"] ?? "",
-      "timing_records_before": counterValue(before, "timing_records"),
-      "timing_records_after": counterValue(after, "timing_records"),
-      "nested_actions_before": counterValue(before, "timing_nested_actions"),
-      "nested_actions_after": counterValue(after, "timing_nested_actions"),
+    expect(counterValue(afterKey, "timing_records") == counterValue(beforeKey, "timing_records") + 1,
+           "nested key control did not admit exactly one timing record")
+    report["key"] = [
+      "action_id": afterKey["last_action_id"] ?? "",
+      "source_instance_id": afterKey["source_instance_id"] ?? "",
+      "sequence_before": beforeKey["source_local_sequence"] ?? "",
+      "sequence_after": afterKey["source_local_sequence"] ?? "",
+      "timing_records_before": counterValue(beforeKey, "timing_records"),
+      "timing_records_after": counterValue(afterKey, "timing_records"),
+      "nested_actions_before": counterValue(beforeKey, "timing_nested_actions"),
+      "nested_actions_after": counterValue(afterKey, "timing_nested_actions"),
       "content_included": false
     ]
     clearComposition()
-    _ = engine.waitUntilDrained(timeout: 3)
+    _ = engine.waitUntilDrained(timeout: 5)
+
+    // A nested raw finalization/deactivation inside the owning action must fold
+    // into it: one record, the owner's operation, and the nested commit call.
+    clearComposition()
+    client.reset()
+    typeCode("jiazheng")
+    let beforeRaw = timingStatus()
+    engine.beginAction("key_handler", eventTimestamp: nil)
+    engine.notePendingOperation("key_update")
+    controller.deactivateServer(client)
+    engine.finishAction()
+    controller.activateServer(client)
+    let afterRaw = timingStatus()
+    expect(client.inserts.filter { $0.contains("jiazheng") }.count == 1,
+           "nested raw finalization did not insert exactly once")
+    expect(counterValue(afterRaw, "timing_nested_actions") == counterValue(beforeRaw, "timing_nested_actions") + 1,
+           "nested raw finalization was not counted exactly once")
+    expect(counterValue(afterRaw, "timing_records") == counterValue(beforeRaw, "timing_records") + 1,
+           "nested raw finalization did not admit exactly one timing record")
+    report["raw"] = [
+      "action_id": afterRaw["last_action_id"] ?? "",
+      "source_instance_id": afterRaw["source_instance_id"] ?? "",
+      "sequence_before": beforeRaw["source_local_sequence"] ?? "",
+      "sequence_after": afterRaw["source_local_sequence"] ?? "",
+      "timing_records_before": counterValue(beforeRaw, "timing_records"),
+      "timing_records_after": counterValue(afterRaw, "timing_records"),
+      "nested_actions_before": counterValue(beforeRaw, "timing_nested_actions"),
+      "nested_actions_after": counterValue(afterRaw, "timing_nested_actions"),
+      "content_included": false
+    ]
+    timingNested = report
+    clearComposition()
+    _ = engine.waitUntilDrained(timeout: 5)
   }
 
   static func runTimingExclusions(phase: String) {
     let previousSecureInputSignal = InputArchiveSignals.secureEventInputEnabled
     InputArchiveSignals.secureEventInputEnabled = { false }
     defer { InputArchiveSignals.secureEventInputEnabled = previousSecureInputSignal }
-    guard let controller = controller else {
+    guard controller != nil else {
       fail("timing exclusions controller unavailable")
       return
     }
-    _ = controller
     var report: [String: Any] = ["phase": phase, "content_included": false]
     switch phase {
     case "baseline":

@@ -83,6 +83,12 @@ final class InputArchiveEngine {
   func notePendingOperation(_ operation: String) {
     lock.lock()
     pendingOperation = operation
+    // The owning action keeps its own operation; a nested entry (for example a
+    // nested raw finalization) must not relabel the action it folds into.
+    if var frame = actionFrame, frame.operation == nil {
+      frame.operation = operation
+      actionFrame = frame
+    }
     lock.unlock()
   }
 
@@ -235,7 +241,8 @@ final class InputArchiveEngine {
     status["timing_refused_gate"] = String(timingCounters.refusedGate)
     status["timing_refused_no_process"] = String(timingCounters.refusedNoProcess)
     status["timing_refused_no_observation"] = String(timingCounters.refusedNoObservation)
-    status["timing_invalid_interval"] = String(timingCounters.invalidInterval)
+    status["timing_refused_object"] = String(timingCounters.refusedObject)
+    status["timing_refused_admission"] = String(timingCounters.refusedAdmission)
     status["timing_unknown_endpoint"] = String(timingCounters.unknownEndpoint)
     status["timing_nested_actions"] = String(timingCounters.nested)
     status["action_depth"] = String(actionDepth)
@@ -472,7 +479,7 @@ extension InputArchiveEngine {
     guard let frame else { return }
     completeAction(
       frame,
-      operation: operation,
+      fallbackOperation: operation,
       fallbackSegment: segment,
       captureEnabled: captureEnabled,
       secure: secure,
@@ -562,7 +569,7 @@ extension InputArchiveEngine {
   /// admitted; it is content-free and never changes input behavior.
   private func completeAction(
     _ frame: InputArchiveActionFrame,
-    operation: String,
+    fallbackOperation: String,
     fallbackSegment: String,
     captureEnabled: Bool,
     secure: Bool,
@@ -592,7 +599,7 @@ extension InputArchiveEngine {
         frame: frame,
         sourceInstanceId: producer.sourceId,
         processId: process,
-        operation: operation
+        operation: frame.operation ?? fallbackOperation
       )
       if object == nil {
         refusal = "invalid_timing_object"
@@ -606,7 +613,7 @@ extension InputArchiveEngine {
       case "no_supported_observation":
         timingCounters.refusedNoObservation += 1
       case "invalid_timing_object":
-        timingCounters.invalidInterval += 1
+        timingCounters.refusedObject += 1
       default:
         timingCounters.refusedGate += 1
       }
@@ -631,7 +638,8 @@ extension InputArchiveEngine {
     if result.admitted {
       timingCounters.admitted += 1
     } else {
-      timingCounters.refusedGate += 1
+      // Queue saturation or loss is not a policy gate refusal.
+      timingCounters.refusedAdmission += 1
     }
     if object["validity"] as? String != "valid" {
       timingCounters.unknownEndpoint += 1
@@ -646,7 +654,8 @@ private struct InputArchiveTimingCounters {
   var refusedGate = 0
   var refusedNoProcess = 0
   var refusedNoObservation = 0
-  var invalidInterval = 0
+  var refusedObject = 0
+  var refusedAdmission = 0
   var unknownEndpoint = 0
   var nested = 0
 }
