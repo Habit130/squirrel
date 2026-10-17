@@ -163,7 +163,8 @@ final class InputArchiveProducer {
       let code = fresh && (desired == "off" || desired == "paused") ? "capture_disabled" : "policy_not_effective"
       return InputArchiveAdmission.refused(code)
     }
-    return enqueueLocked(snapshot, kind: kind ?? "unknown_outcome", size: size)
+    let displaceable = snapshot["priority_class"] as? String != "metadata"
+    return enqueueLocked(snapshot, kind: kind ?? "unknown_outcome", size: size, displaceable: displaceable)
   }
 }
 
@@ -241,7 +242,7 @@ extension InputArchiveProducer {
     return enqueueLocked(snapshot, kind: kind, size: size)
   }
 
-  private func enqueueLocked(_ snapshot: [String: Any], kind: String, size: Int) -> InputArchiveAdmission {
+  private func enqueueLocked(_ snapshot: [String: Any], kind: String, size: Int, displaceable: Bool = true) -> InputArchiveAdmission {
     let priority = highPriority(kind) ? "high" : "low"
     let item = QueuedObservation(
       kind: kind,
@@ -257,7 +258,10 @@ extension InputArchiveProducer {
       queuedBytes += size
       return InputArchiveAdmission(admitted: true, code: "admitted", captureSequence: nil, priority: priority)
     }
-    if priority == "high" {
+    // Metadata (timing) records outrank queued pages for sending, but they never
+    // displace one: the page they reference may still be in this queue, and a
+    // displaced page would leave a dangling reference in the archive.
+    if priority == "high" && displaceable {
       if let index = queue.firstIndex(where: { $0.priority == "low" }) {
         dropLocked(index)
         queue.append(item)

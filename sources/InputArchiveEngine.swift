@@ -642,6 +642,7 @@ extension InputArchiveEngine {
       fields["commit_id"] = commit
     }
     fields["stage"] = "frontend_timing"
+    fields["priority_class"] = "metadata"
     fields["payload"] = ["frontend_timing": object]
     let result = admit(fields)
     lock.lock()
