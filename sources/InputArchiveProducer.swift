@@ -13,6 +13,9 @@ import Foundation
 final class InputArchiveProducer {
   private static let maxSendAttempts = 3
   private static let maxPendingLosses = 64
+  private static let acceptedIdentityLimit = 256
+  private static let deferredMetadataLimit = 64
+  private static let maxDeferrals = 50
 
   private let lock = NSLock()
   private let transportCall: (String, String, [String: Any]) -> [String: Any]
@@ -33,6 +36,9 @@ final class InputArchiveProducer {
   private var collectorUnavailable = true
   private var lastPoll: UInt64?
   private var stopped = false
+  private var acceptedIdentities: Set<String> = []
+  private var acceptedOrder: [String] = []
+  private var deferredMetadata: [QueuedObservation] = []
   private var sender: Thread?
   private var workingDirectoryAtStart = FileManager.default.currentDirectoryPath
 
@@ -64,6 +70,9 @@ final class InputArchiveProducer {
       queue.removeAll(keepingCapacity: true)
       queuedBytes = 0
       localLosses.removeAll(keepingCapacity: true)
+      deferredMetadata.removeAll(keepingCapacity: true)
+      acceptedIdentities.removeAll(keepingCapacity: true)
+      acceptedOrder.removeAll(keepingCapacity: true)
       observedRevision = nil
       observedDesired = nil
       observedAt = nil
@@ -350,15 +359,97 @@ extension InputArchiveProducer {
   private func drain(limit: Int) -> (batch: [QueuedObservation], losses: [QueuedObservation]) {
     lock.lock()
     defer { lock.unlock() }
-    let count = min(limit, queue.count)
-    let batch = Array(queue.prefix(count))
-    queue.removeFirst(count)
-    queuedBytes -= batch.reduce(0) { $0 + $1.size }
+    releaseDeferredLocked()
+    var batch: [QueuedObservation] = []
+    var index = 0
+    while index < queue.count && batch.count < limit {
+      let item = queue[index]
+      if !item.references.isEmpty && !referencesAcceptedLocked(item) {
+        // A timing record waits until the collector accepted the observation it
+        // references, so one batch cannot persist a dangling reference.
+        queue.remove(at: index)
+        queuedBytes -= item.size
+        deferMetadataLocked(item)
+        continue
+      }
+      batch.append(item)
+      index += 1
+    }
+    if !batch.isEmpty {
+      queue.removeFirst(batch.count)
+      queuedBytes -= batch.reduce(0) { $0 + $1.size }
+    }
     let lossCount = min(limit, localLosses.count)
     let losses = Array(localLosses.prefix(lossCount))
     localLosses.removeFirst(lossCount)
     inFlight += batch.count + losses.count
     return (batch, losses)
+  }
+
+  private func referencesAcceptedLocked(_ item: QueuedObservation) -> Bool {
+    item.references.allSatisfy { acceptedIdentities.contains($0) }
+  }
+
+  private func markAcceptedLocked(_ item: QueuedObservation) {
+    for identity in Self.references(in: item.snapshot) where !acceptedIdentities.contains(identity) {
+      acceptedIdentities.insert(identity)
+      acceptedOrder.append(identity)
+    }
+    while acceptedOrder.count > Self.acceptedIdentityLimit {
+      let oldest = acceptedOrder.removeFirst()
+      acceptedIdentities.remove(oldest)
+    }
+  }
+
+  private func deferMetadataLocked(_ item: QueuedObservation) {
+    if deferredMetadata.count < Self.deferredMetadataLimit {
+      deferredMetadata.append(item)
+      return
+    }
+    knownDropped += 1
+    rememberLossLocked(item, reason: "queue_saturated")
+  }
+
+  private func releaseDeferredLocked() {
+    var index = deferredMetadata.count - 1
+    while index >= 0 {
+      var item = deferredMetadata[index]
+      if referencesAcceptedLocked(item) {
+        deferredMetadata.remove(at: index)
+        if fitsLocked(item.size) {
+          queue.insert(item, at: 0)
+          queuedBytes += item.size
+        } else {
+          knownDropped += 1
+          rememberLossLocked(item, reason: "requeue_saturated")
+        }
+      } else {
+        item.deferrals += 1
+        if item.deferrals > Self.maxDeferrals {
+          deferredMetadata.remove(at: index)
+          knownDropped += 1
+          rememberLossLocked(item, reason: "queue_saturated")
+        } else {
+          deferredMetadata[index] = item
+        }
+      }
+      index -= 1
+    }
+  }
+
+  private func dropDeferredMetadataLocked(referenced: [String]) {
+    guard !referenced.isEmpty else { return }
+    let identities = Set(referenced)
+    var index = deferredMetadata.count - 1
+    while index >= 0 {
+      let item = deferredMetadata[index]
+      if !identities.isDisjoint(with: item.references) {
+        deferredMetadata.remove(at: index)
+        knownDropped += 1
+        rememberLossLocked(item, reason: "queue_saturated")
+      }
+      index -= 1
+    }
   }
 
   private func finishDelivery(
@@ -374,7 +465,7 @@ extension InputArchiveProducer {
       let isLoss = isLossBatch || item.kind == "loss_notice"
       switch outcome {
       case .accepted:
-        break
+        markAcceptedLocked(item)
       case .retryable(let reason):
         if item.attempts + 1 < Self.maxSendAttempts,
            item.socketPath == socketPath,
@@ -405,6 +496,7 @@ extension InputArchiveProducer {
         knownRefused += 1
         rememberLossLocked(item, reason: "requeue_saturated")
         dropDependentMetadataLocked(referenced: Self.references(in: item.snapshot))
+        dropDeferredMetadataLocked(referenced: Self.references(in: item.snapshot))
       }
     }
     return !retries.isEmpty
@@ -421,6 +513,7 @@ extension InputArchiveProducer {
       rememberLossLocked(item, reason: reason)
     }
     dropDependentMetadataLocked(referenced: Self.references(in: item.snapshot))
+    dropDeferredMetadataLocked(referenced: Self.references(in: item.snapshot))
   }
 }
 
@@ -591,6 +684,7 @@ private struct QueuedObservation {
   /// Owned identities a queued metadata record points at. If one of these is
   /// dropped before the metadata is sent, the metadata must be dropped too.
   var references: [String] = []
+  var deferrals = 0
 }
 
 private enum DeliveryOutcome {
