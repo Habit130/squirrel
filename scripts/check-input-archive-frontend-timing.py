@@ -27,6 +27,9 @@ BACKEND_COMMIT = "1fdc1f6656a98ee60e0d704effdbe782a875c78b"
 BACKEND_TREE = "8a94bab5dc124a8cbba9ae414d4980ee47f6c941"
 FRONTEND_BASE = "25dcef379ce6954a2a4274560c9ec85bb13ed999"
 WATCHDOG_MS = 2000
+# The backend export's own ignored work root is generated checker state, not
+# part of the tracked export identity.
+EXPORT_IGNORED_ENTRIES = {".local-work"}
 HARNESS_PATH = "probes/input_archive_frontend_harness.swift"
 DOCS_PATH = "docs/input-archive-frontend.md"
 REQUIRED_CASES = (
@@ -90,16 +93,18 @@ def git_blob_oid(path):
     return hashlib.sha1(b"blob %d\0" % len(content) + content).digest()
 
 
-def git_tree_oid(path):
+def git_tree_oid(path, top=True):
     entries = []
     with os.scandir(path) as iterator:
         for item in iterator:
+            if top and item.name in EXPORT_IGNORED_ENTRIES:
+                continue
             info = item.stat(follow_symlinks=False)
             if stat.S_ISLNK(info.st_mode):
                 raise RuntimeError("backend export contains a symlink: %s" % item.path)
             if stat.S_ISDIR(info.st_mode):
                 mode = b"40000"
-                oid = bytes.fromhex(git_tree_oid(item.path))
+                oid = bytes.fromhex(git_tree_oid(item.path, top=False))
                 sort_name = os.fsencode(item.name) + b"/"
             elif stat.S_ISREG(info.st_mode):
                 mode = b"100755" if info.st_mode & 0o111 else b"100644"
@@ -116,6 +121,8 @@ def git_tree_oid(path):
 def backend_file_count(path):
     count = 0
     for _, dirs, files in os.walk(path, followlinks=False):
+        if _ == path:
+            dirs[:] = [name for name in dirs if name not in EXPORT_IGNORED_ENTRIES]
         if any(os.path.islink(os.path.join(_, name)) for name in dirs):
             raise RuntimeError("backend export contains a symlink directory")
         count += len(files)
