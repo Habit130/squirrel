@@ -30,6 +30,14 @@ final class SquirrelPanel: NSPanel {
   private var candidates: [String] = .init()
   // periphery:ignore - isolated harness counts real panel.update returns
   private(set) var updateCompletionCount: UInt64 = 0
+  // periphery:ignore - isolated harness reads the last published page state
+  var fixtureCandidates: [String] { candidates }
+  // periphery:ignore - isolated harness reads the last published page state
+  var fixturePage: Int { page }
+  // periphery:ignore - isolated harness reads the last published page state
+  var fixtureLastPage: Bool { lastPage }
+  // periphery:ignore - isolated harness reads the last published page state
+  var fixturePreedit: String { preedit }
   private var comments: [String] = .init()
   private var labels: [String] = .init()
   private var index: Int = 0
