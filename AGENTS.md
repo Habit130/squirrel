@@ -253,5 +253,7 @@ Before concurrent work, establish one exclusive owner for each applicable shared
 - **Quiet machine**: one owner when the deliverable includes latency or timing measurements.
 
 Unresolved ownership blocks the affected concurrent work. Machine-specific instances are
-located in the ignored `.local/agent-context.md`, never credentials. Tickets and PRs remain
-the authoritative handoff; existing ignored historical evidence and handoffs are preserved.
+located in the ignored `.local/agent-context.md`, never credentials. GitHub tickets and PRs
+are the record. Once a closed ticket's result is on GitHub, its ignored local evidence,
+worktrees and handoffs may be removed; whatever an open ticket, an open PR or a running
+machine service still uses is kept and named in `.local/agent-context.md`.
