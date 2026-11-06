@@ -156,6 +156,24 @@ Optional local signing/notarization uses `DEV_ID` to select Apple Developer cert
 a preconfigured keychain profile. No current workflow references an Actions secret for it.
 This guide names the mechanism only; it does not authorize reading or creating credentials.
 
+### Periphery in CI
+
+All three workflows install Periphery from the official Homebrew core formula and log the scanner version before the scan:
+
+```sh
+brew install periphery
+periphery version
+```
+
+Do not use the `peripheryapp/periphery` tap. Upstream stopped updating it at 3.0, and its cask now fails on current Homebrew (`depends_on macos: :catalina` is disabled). On `macos-26` / Xcode 26.5 the core formula installs Periphery 3.8.0 (#208). The last tap-based green run used 2.21.2.
+
+The scan requirement is unchanged: the same `.periphery.yml` and the same `periphery scan --relative-results --skip-build --index-store-path build/Index.noindex/DataStore`. It runs after the build and the installed-grammar check, with no `continue-on-error`, skip condition, exclusion, or baseline. An install or scan failure fails `build`. Findings are reported as warnings and do not fail the job, the same policy as before. Version 3.x differs in two ways:
+
+- 3.0 removed target selection, so 3.8.0 logs `warning: .periphery.yml: invalid key 'targets'` and scans every source file in the index store. `Squirrel` is the project's only native target, so the scanned set does not shrink.
+- 3.8.0 also reports superfluous `periphery:ignore` comments as additional warnings.
+
+Deferred limitation: Homebrew marks the core formula deprecated because the upstream repository is archived, and it is scheduled for disablement on 2027-08-12. Replacing Periphery, or otherwise acquiring it after that date, is follow-up work outside #208.
+
 ## Command evidence from Initialize (#206)
 
 Commands were run in an owned temporary worktree at
