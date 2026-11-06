@@ -18,9 +18,14 @@ Do not infer that a successful top-level `make` compiled changes under `librime/
 This is the CI and day-to-day frontend path:
 
 ```sh
+git submodule update --init --recursive librime plum
 ./action-install.sh
 make
 ```
+
+Initialize submodules before staging the prebuilt artifacts in a fresh worktree. The Swift
+bridge still needs librime's checked-out headers. Staging first creates a nonempty `librime/`
+directory that Git cannot initialize as a fresh submodule.
 
 `action-install.sh` downloads the pinned prebuilt `librime.1.dylib`, Sparkle framework, bundled librime plugins, and the pinned universal `librime-llm-rerank.dylib` release artifact. It stages them under `lib/`, `Frameworks/`, and `lib/rime-plugins/`. It also installs the extra plum recipes listed in `package/bundled_recipes` (currently the octagram grammar data). `action-build.sh release` / `package` / `archive` call the same script and must not redeclare that list.
 
@@ -103,15 +108,93 @@ Common targets:
 - `make install` / `make install-debug` / `make install-release`: install into `/Library/Input Methods`
 - `make clean` / `make clean-deps` / `make clean-package`: remove the corresponding generated artifacts
 
-The Squirrel Xcode project has no unit-test target. The repository-wide delivery baseline is in `docs/agents/issue-tracker.md`. Frontend changes require `swiftlint`, a full build, and the post-build Periphery scan:
+The Squirrel Xcode project has no unit-test target. Delivery and review are defined by
+`docs/agents/builder.md` and `docs/agents/review.md`; the ticket names its Verification.
+Frontend changes require `swiftlint`, a full build, and the post-build Periphery scan:
 
 ```sh
 swiftlint
 periphery scan --relative-results --skip-build --index-store-path build/Index.noindex/DataStore
 ```
 
-Use `SKILL.md` for the behavior-specific manual validation checklist. For live testing, install a debug or release build, enable Squirrel in System Settings, and attach Xcode to the Squirrel process that macOS launches; do not expect Xcode Run to launch the IMK server correctly.
+Use `.agents/skills/squirrel-input-method-architecture/SKILL.md` for the behavior-specific manual validation checklist. For live testing, install a debug or release build, enable Squirrel in System Settings, and attach Xcode to the Squirrel process that macOS launches; do not expect Xcode Run to launch the IMK server correctly.
 
-For librime source changes, use `make -C librime test` or `make -C librime test-debug` as required by the ticket. A separately delivered plugin follows its own repository's test rules in addition to the Squirrel integration path specified by the execution prompt.
+For librime source changes, use `make -C librime test` or `make -C librime test-debug` as required by the ticket. A separately delivered plugin follows its own repository's test rules in addition to the Squirrel integration path specified by its ticket.
 
-CI uses macOS 26 with Xcode 26.5. Commit and pull-request workflows run SwiftLint, `package/check_package_integrity`, `package/check_bundled_recipes`, `package/check_update_channel`, `./action-build.sh package` (the documented `./action-install.sh && make` plus universal/package flags), and Periphery. After the package build they rerun the recipe check with `--require-installed`. The release workflow substitutes `./action-build.sh archive` so it also builds the versioned installer archive.
+For governance/docs-only work with `sources/` unchanged, use the structural Verification
+named by the ticket. App builds, SwiftLint and Periphery are not automatic prerequisites for
+that path. Preserve separately observed command failures as facts rather than weakening the
+ticket's Verification or repairing product code in a governance delivery.
+
+## CI and Actions secrets
+
+CI uses macOS 26 with Xcode 26.5. Commit and pull-request workflows run the download-checksum
+test, SwiftLint, `package/check_package_integrity`, `package/check_bundled_recipes`,
+`package/check_update_channel`, `./action-build.sh package` (the prebuilt path with universal
+and package flags), and Periphery. After packaging they rerun the recipe check with
+`--require-installed`. The release workflow substitutes `./action-build.sh archive` and
+creates draft tag releases; its upstream-only nightly condition is not active in this fork.
+
+`pull request ci` runs on every PR without a path filter, and its job's reported name is
+`build`: this is the repository's confirmed required check. The push-only `commit ci` and
+`release ci` also name their job `build`; they are not additional every-PR checks. The
+default-branch push-triggered CI run is the post-merge smoke check.
+
+The generated governance workflows are separate: `governance-gate` judges default-branch PRs
+from the default branch's trusted checkout, and `merge-watch` records misses after pushes or
+completed default-branch workflow runs. The owner script adds the model's governance check
+when habit applies the approved GitHub target state after merge; Merge watch is not required.
+
+There are no referenced custom Actions secrets to provision. The built-in credential is
+issued automatically by GitHub for each job, never supplied as a value by an agent:
+
+| Name | Purpose | Issuing service |
+| --- | --- | --- |
+| `GITHUB_TOKEN` / `github.token` | Draft release publishing; the governance gate's head check run; Merge watch's issue records and evidence reads, within each workflow's declared permissions | GitHub Actions |
+
+Optional local signing/notarization uses `DEV_ID` to select Apple Developer certificates and
+a preconfigured keychain profile. No current workflow references an Actions secret for it.
+This guide names the mechanism only; it does not authorize reading or creating credentials.
+
+## Command evidence from Initialize (#206)
+
+Commands were run in an owned temporary worktree at
+`25dcef379ce6954a2a4274560c9ec85bb13ed999`, not in the original checkout or live deployment.
+The optional source-plugin checkout resolved to
+`e95f50a42769f1895636b6c4380f1dd5e300a2dc` in `Habit130/librime-llm-rerank`. These are
+observations of that baseline and environment, not promises that a future mutable checkout
+or another machine passes. Raw command results and causes are recorded on the issue.
+
+| Command run | Result | Context or cause |
+| --- | --- | --- |
+| `./package/pin_build_deps_test.sh` | Working | Checksum mismatch prevents extraction; matching checksums reach extraction |
+| `make check-package-integrity` | Working | Stale package rebuild and disabled-appcast cases passed |
+| `make check-update-channel` | Working | Fork channel checks passed |
+| `bash package/check_bundled_recipes` | Working | Shared recipe/manifest contract passed |
+| `swiftlint` | Failing, exit 127 | Executable absent on PATH; no installation attempted |
+| `./action-install.sh` | Working | Pinned downloads, hashes, prebuilt staging and recipe installation succeeded |
+| `make`, `make debug`, `make package`, `make archive` before submodule initialization | Failing, exit 2 | Swift bridge could not find `rime_api_stdbool.h` |
+| `git submodule update --init --recursive librime plum` after prebuilt staging | Failing, exit 1 | Generated `librime/` was nonempty; those own generated bytes were preserved outside the worktree |
+| `git submodule update --init --recursive librime plum` with the submodule destination absent | Working | Initialized checked-out engine headers and plum before the subsequent builds |
+| `make` after initialization | Working | Release app built with pinned prebuilts |
+| `make debug` after initialization | Working | Debug app built with pinned prebuilts |
+| `make package` after initialization | Working | Unsigned local installer built; not installed or published |
+| `bash package/check_bundled_recipes --require-installed` | Working | Referenced grammar files existed after prebuilt staging |
+| `periphery scan --relative-results --skip-build --index-store-path build/Index.noindex/DataStore` | Failing, exit 127 | Executable absent on PATH; no installation attempted |
+| `make sparkle`, `make package/generate_keys`, `make package/sign_update` | Failing, exit 2 | Sparkle source submodule/project was absent; a staged framework is not its source-tool project |
+| `make archive` after engine/plum initialization | Failing, exit 2 | App/package stages succeeded, but `package/sign_update` required the absent Sparkle source project |
+| `librime/install-plugins.sh Habit130/librime-llm-rerank` | Working | Cloned the custom plugin into the temporary engine tree only |
+| `make clean` | Working | Removed that temporary worktree's generated staging outputs only |
+| `make` after the source-path exports and clean | Failing, exit 2 | Engine and custom plugin compiled; app bundling lacked the expected lua, predict and octagram dylibs |
+| `make -C librime test` | Failing, exit 2 | Plugin suite setup rejected a 172-byte Unix-socket pathname against its 104-byte limit; 26 dependent cases skipped; core `rime_test` passed |
+| `make -C librime test-debug` | Failing, exit 2 | Plugin test process segfaulted while starting `LazyTranslationsKeepTheirOwnScoringContext`; underlying cause not diagnosed; core `rime_test` passed |
+
+The source-build attempt used the documented `BOOST_ROOT=/opt/homebrew/opt/boost` and
+`MACOSX_DEPLOYMENT_TARGET=13.0` exports. Installing only the custom plugin did not provide
+the other plugin binaries required by the app's checked-in bundle manifest.
+
+No product code, Makefile, existing CI configuration or dependency pin was changed to make a
+command pass. No machine-level software installation, live input-method installation,
+permission-changing target, notary credential storage or real-input capture was run.
+Failures above remain separate product, dependency or environment work, not options to
+silently repair during governance initialization.
