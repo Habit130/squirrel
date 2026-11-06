@@ -115,3 +115,21 @@ Use `SKILL.md` for the behavior-specific manual validation checklist. For live t
 For librime source changes, use `make -C librime test` or `make -C librime test-debug` as required by the ticket. A separately delivered plugin follows its own repository's test rules in addition to the Squirrel integration path specified by the execution prompt.
 
 CI uses macOS 26 with Xcode 26.5. Commit and pull-request workflows run SwiftLint, `package/check_package_integrity`, `package/check_bundled_recipes`, `package/check_update_channel`, `./action-build.sh package` (the documented `./action-install.sh && make` plus universal/package flags), and Periphery. After the package build they rerun the recipe check with `--require-installed`. The release workflow substitutes `./action-build.sh archive` so it also builds the versioned installer archive.
+
+### Periphery in CI
+
+All three workflows install Periphery from the official Homebrew core formula and log the scanner version before the scan:
+
+```sh
+brew install periphery
+periphery version
+```
+
+Do not use the `peripheryapp/periphery` tap. Upstream stopped updating it at 3.0, and its cask now fails on current Homebrew (`depends_on macos: :catalina` is disabled). On `macos-26` / Xcode 26.5 the core formula installs Periphery 3.8.0 (#208). The last tap-based green run used 2.21.2.
+
+The scan requirement is unchanged: the same `.periphery.yml` and the same `periphery scan --relative-results --skip-build --index-store-path build/Index.noindex/DataStore`. It runs after the build and the installed-grammar check, with no `continue-on-error`, skip condition, exclusion, or baseline. An install or scan failure fails `build`. Findings are reported as warnings and do not fail the job, the same policy as before. Version 3.x differs in two ways:
+
+- 3.0 removed target selection, so 3.8.0 logs `warning: .periphery.yml: invalid key 'targets'` and scans every source file in the index store. `Squirrel` is the project's only native target, so the scanned set does not shrink.
+- 3.8.0 also reports superfluous `periphery:ignore` comments as additional warnings.
+
+Deferred limitation: Homebrew marks the core formula deprecated because the upstream repository is archived, and it is scheduled for disablement on 2027-08-12. Replacing Periphery, or otherwise acquiring it after that date, is follow-up work outside #208.
